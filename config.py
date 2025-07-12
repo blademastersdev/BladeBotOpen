@@ -382,3 +382,8 @@ def validate_bm_cooldown(last_challenge_date: str, admin_override: bool = False)
         
     except Exception as e:
         return {'valid': False, 'reason': f'Error validating cooldown: {e}'}
+    
+# Backward compatibility - add 'name' as alias for 'display_name'
+for duel_type_key, duel_type_config in DUEL_TYPES.items():
+    if 'display_name' in duel_type_config and 'name' not in duel_type_config:
+        duel_type_config['name'] = duel_type_config['display_name']

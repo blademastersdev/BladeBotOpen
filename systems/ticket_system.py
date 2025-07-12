@@ -341,7 +341,7 @@ class TicketSystem:
             channel = await guild.create_text_channel(
                 name=channel_name,
                 overwrites=overwrites,
-                topic=f"{DUEL_TYPES[duel_type]['name']} Duel: {challenger.display_name} vs {challenged.display_name}",
+                topic=f"{DUEL_TYPES[duel_type]['display_name']} Duel: {challenger.display_name} vs {challenged.display_name}",
                 reason=f"Duel ticket created for {duel_type} challenge"
             )
             
@@ -539,7 +539,7 @@ class TicketSystem:
         duel_info = DUEL_TYPES[duel_type]
         
         embed = discord.Embed(
-            title=f"⚔️ {duel_info['name']} Duel Coordination",
+            title=f"⚔️ {duel_info['display_name']} Duel Coordination",
             description=f"{challenger.mention} vs {challenged.mention}",
             color=EMBED_COLORS['duel'],
             timestamp=datetime.now()
@@ -548,7 +548,7 @@ class TicketSystem:
         embed.add_field(
             name="Duel Information",
             value=(
-                f"**Type:** {duel_info['name']}\n"
+                f"**Type:** {duel_info['display_name']}\n"
                 f"**Challenge ID:** {challenge_id}\n"
                 f"**Challenger:** {challenger.display_name}\n"
                 f"**Challenged:** {challenged.display_name}\n"
