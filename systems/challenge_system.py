@@ -260,100 +260,56 @@ class ChallengeSystem:
     
     async def get_challenge_embed_data(self, challenge_id: int, guild: discord.Guild) -> Optional[Dict[str, Any]]:
         """
-        Get challenge data formatted for embed display with enhanced error handling
-        
-        Args:
-            challenge_id: Challenge ID
-            guild: Discord guild
-            
-        Returns:
-            Dictionary with embed data or None if not found
+        Get challenge data formatted for embed display
+        FIXED VERSION: Removed broken enhancement references
         """
         try:
             challenge = await self.db.get_challenge(challenge_id)
             if not challenge:
-                logger.warning(f'Challenge {challenge_id} not found in database')
+                logger.warning(f"Challenge {challenge_id} not found in database")
                 return None
             
-            # Safe member retrieval with validation
-            challenger = None
-            challenged = None
+            challenger = guild.get_member(challenge['challenger_id'])
+            challenged = guild.get_member(challenge['challenged_id']) if challenge['challenged_id'] else None
             
-            try:
-                challenger = guild.get_member(challenge['challenger_id'])
-                if not challenger:
-                    logger.warning(f'Challenger {challenge["challenger_id"]} not found in guild {guild.id}')
-            except Exception as e:
-                logger.error(f'Error retrieving challenger {challenge["challenger_id"]}: {e}')
-            
-            try:
-                if challenge['challenged_id']:
-                    challenged = guild.get_member(challenge['challenged_id'])
-                    if not challenged:
-                        logger.warning(f'Challenged user {challenge["challenged_id"]} not found in guild {guild.id}')
-            except Exception as e:
-                logger.error(f'Error retrieving challenged user {challenge["challenged_id"]}: {e}')
-            
-            # Safe user data retrieval
+            # Get user data with error handling
             challenger_user = None
             challenged_user = None
             
             try:
                 challenger_user = await self.db.get_user(challenge['challenger_id'])
             except Exception as e:
-                logger.error(f'Error retrieving challenger user data {challenge["challenger_id"]}: {e}')
+                logger.warning(f"Could not get challenger user data: {e}")
             
-            try:
-                if challenge['challenged_id']:
+            if challenge['challenged_id']:
+                try:
                     challenged_user = await self.db.get_user(challenge['challenged_id'])
-            except Exception as e:
-                logger.error(f'Error retrieving challenged user data {challenge["challenged_id"]}: {e}')
+                except Exception as e:
+                    logger.warning(f"Could not get challenged user data: {e}")
             
-            # Safe duel type access
-            duel_info = DUEL_TYPES.get(challenge['challenge_type'])
-            if not duel_info:
-                logger.error(f'Unknown challenge type: {challenge["challenge_type"]}')
-                duel_info = {'name': 'Unknown', 'description': 'Unknown duel type'}
+            # Get duel type info
+            duel_info = DUEL_TYPES.get(challenge['challenge_type'], {
+                'display_name': challenge['challenge_type'].title(),
+                'description': f"{challenge['challenge_type']} duel"
+            })
             
-            # Build embed data with safe attribute access
             embed_data = {
                 'challenge_id': challenge_id,
                 'challenge_type': challenge['challenge_type'],
-                'duel_name': duel_info['name'],
+                'duel_name': duel_info['display_name'],
                 'duel_description': duel_info['description'],
                 'challenger': challenger,
                 'challenged': challenged,
-                'created_at': challenge.get('created_at'),
-                'expires_at': challenge.get('expires_at')
+                'challenger_rank': f"{challenger_user['tier']} {challenger_user['rank_numeral']}" if challenger_user else "Unknown",
+                'challenged_rank': f"{challenged_user['tier']} {challenged_user['rank_numeral']}" if challenged_user else None,
+                'expires_at': challenge.get('expires_at'),
+                'status': challenge['status']
             }
             
-            # Safe rank formatting with fallbacks
-            if challenger_user:
-                embed_data['challenger_rank'] = f"{challenger_user['tier']} {challenger_user['rank_numeral']}"
-            else:
-                embed_data['challenger_rank'] = "Unknown Rank"
-                
-            if challenged_user:
-                embed_data['challenged_rank'] = f"{challenged_user['tier']} {challenged_user['rank_numeral']}"
-            else:
-                embed_data['challenged_rank'] = "Unknown Rank" if challenge['challenged_id'] else "N/A"
-            
-            # Safe name access with fallbacks
-            if challenger:
-                embed_data['challenger_name'] = getattr(challenger, 'display_name', getattr(challenger, 'name', f'ID:{challenger.id}'))
-            else:
-                embed_data['challenger_name'] = f"Unknown User (ID: {challenge['challenger_id']})"
-                
-            if challenged:
-                embed_data['challenged_name'] = getattr(challenged, 'display_name', getattr(challenged, 'name', f'ID:{challenged.id}'))
-            else:
-                embed_data['challenged_name'] = f"Unknown User (ID: {challenge['challenged_id']})" if challenge['challenged_id'] else "Open Challenge"
-            
-            logger.info(f'Successfully retrieved embed data for challenge {challenge_id}')
             return embed_data
             
         except Exception as e:
-            logger.error(f'Error in get_challenge_embed_data for challenge {challenge_id}: {e}')
+            logger.error(f"Error retrieving challenge embed data for {challenge_id}: {e}")
             return None
 
     def validate_member_object(member: Optional[discord.Member], context: str = "") -> tuple[bool, str]:
@@ -416,16 +372,10 @@ class ChallengeSystem:
             return None
 
     async def _validate_bm_challenge(self, challenger: discord.Member, 
-                                   challenged: Optional[discord.Member]) -> Tuple[bool, str]:
+                                challenged: Optional[discord.Member]) -> Tuple[bool, str]:
         """
         Validate BM challenge specific requirements
-        
-        Args:
-            challenger: Member issuing the challenge
-            challenged: Target member (None for general challenges)
-            
-        Returns:
-            Tuple of (is_valid, reason)
+        FIXED VERSION: Uses config values, removed broken enhancement references
         """
         challenger_user = await self.db.get_user(challenger.id)
         if not challenger_user:
@@ -435,10 +385,10 @@ class ChallengeSystem:
         if challenger_user['tier'] in ['Evaluation', 'Guest']:
             return False, "You must be a Blademaster to issue BM challenges"
         
-        # Check cooldown
+        # Check cooldown - USE CONFIG VALUE
         if challenger_user['last_challenge_date']:
             last_challenge = datetime.fromisoformat(challenger_user['last_challenge_date'])
-            cooldown_hours = DUEL_TYPES['bm']['cooldown_hours']
+            cooldown_hours = DUEL_TYPES['bm']['cooldown_hours']  # Use config, not hardcoded 72
             if datetime.now() - last_challenge < timedelta(hours=cooldown_hours):
                 remaining = cooldown_hours - (datetime.now() - last_challenge).total_seconds() / 3600
                 return False, f"BM challenge cooldown active. {remaining:.1f} hours remaining"
@@ -460,55 +410,72 @@ class ChallengeSystem:
         return True, "BM challenge is valid"
     
     async def get_challengeable_users(self, challenger_id: int, challenge_type: str) -> List[Dict[str, Any]]:
-        """Get list of users that can be challenged (existing method - enhanced for BM)"""
+        """Get list of users that can be challenged - FIXED VERSION"""
         if challenge_type == 'bm':
-            # ENHANCED: Use automatic targeting instead of manual list
+            # Get users one rank above challenger (removed all broken enhancement references)
             challenger_user = await self.db.get_user(challenger_id)
             if not challenger_user:
                 return []
             
-            # Get target rank based on subrank mode
-            if self.subrank_mode_enabled:
-                from config import get_next_rank
-                target_tier, target_numeral = get_next_rank(
-                    challenger_user['tier'], 
-                    challenger_user['rank_numeral']
-                )
-            else:
-                target_tier, target_numeral = self._get_next_tier_rank(challenger_user['tier'])
+            # Use existing config function to get next rank
+            from config import get_next_rank
+            target_tier, target_numeral = get_next_rank(
+                challenger_user['tier'], 
+                challenger_user['rank_numeral']
+            )
             
             if not target_tier:
-                return []
+                return []  # Already at top rank
             
-            return await self._get_users_in_rank(target_tier, target_numeral)
+            # Get users at the target rank
+            try:
+                return await self.ranking_system.get_users_at_rank(target_tier, target_numeral)
+            except Exception as e:
+                logger.error(f"Error getting users at rank {target_tier} {target_numeral}: {e}")
+                return []
         else:
-            # For friendly and official, can challenge anyone who is active (existing logic)
-            return await self.ranking_system.get_available_targets_for_challenge(challenger_id)
+            # For friendly and official challenges, get available targets
+            try:
+                return await self.ranking_system.get_available_targets_for_challenge(challenger_id)
+            except Exception as e:
+                logger.error(f"Error getting available targets: {e}")
+                # Fallback to all registered users if the specific method fails
+                return await self.db.get_all_registered_users()
     
     async def get_ping_role_for_challenge(self, challenge_type: str, challenger_id: int) -> Optional[int]:
         """
         Get the appropriate ping role for a challenge
-        
-        Args:
-            challenge_type: Type of challenge
-            challenger_id: Discord ID of challenger
-            
-        Returns:
-            Role ID to ping or None
+        FIXED VERSION: Returns correct role IDs from SPECIAL_ROLES
         """
-        if challenge_type in ['friendly', 'official']:
-            return DUEL_TYPES[challenge_type]['ping_role']
-        elif challenge_type == 'bm':
-            # For BM challenges, ping the rank directly above
-            challenger_user = await self.db.get_user(challenger_id)
-            if challenger_user:
-                from config import get_next_rank, get_tier_role_id
-                next_tier, next_numeral = get_next_rank(challenger_user['tier'], challenger_user['rank_numeral'])
-                if next_tier:
-                    return get_tier_role_id(next_tier)
+        try:
+            if challenge_type == 'friendly':
+                from config import SPECIAL_ROLES
+                return SPECIAL_ROLES.get('friendly_duel_pings')
+            elif challenge_type == 'official':
+                from config import SPECIAL_ROLES
+                return SPECIAL_ROLES.get('official_duel_pings')
+            elif challenge_type == 'bm':
+                # For BM challenges, ping the rank directly above
+                challenger_user = await self.db.get_user(challenger_id)
+                if challenger_user:
+                    from config import get_next_rank
+                    next_tier, next_numeral = get_next_rank(challenger_user['tier'], challenger_user['rank_numeral'])
+                    if next_tier:
+                        # Try to get tier role ID
+                        try:
+                            from config import get_tier_role_id
+                            return get_tier_role_id(next_tier)
+                        except ImportError:
+                            # If function doesn't exist, try TIER_ROLES directly
+                            from config import TIER_ROLES
+                            return TIER_ROLES.get(next_tier)
+                return None
+            
             return None
-        
-        return None
+            
+        except Exception as e:
+            logger.error(f"Error getting ping role for {challenge_type} challenge: {e}")
+            return None
 
     async def find_recent_challenge_to_user(self, user: discord.Member) -> Optional[Dict[str, Any]]:
         """
