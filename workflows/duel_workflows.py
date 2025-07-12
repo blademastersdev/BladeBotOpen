@@ -37,7 +37,7 @@ class DuelWorkflows:
         self.ticket_system = TicketSystem(bot)
     
     async def process_complete_duel_workflow(self, challenge_type: str, challenger: discord.Member,
-                                           challenged: Optional[discord.Member], guild: discord.Guild) -> Dict[str, Any]:
+                                        challenged: Optional[discord.Member], guild: discord.Guild) -> Dict[str, Any]:
         """
         Process a complete duel workflow from challenge to ticket creation
         
@@ -60,6 +60,34 @@ class DuelWorkflows:
                 'ping_role': None
             }
             
+            # ENHANCED MEMBER VALIDATION - Fix for 'name' error
+            if not challenger or not hasattr(challenger, 'name'):
+                workflow_result['message'] = "Invalid challenger - member object is missing or corrupted"
+                logger.error(f'Invalid challenger object in duel workflow: {challenger}')
+                return workflow_result
+            
+            if challenged and (not hasattr(challenged, 'name') or challenged.bot):
+                workflow_result['message'] = "Invalid target - cannot challenge bots or corrupted member objects"
+                logger.error(f'Invalid challenged object in duel workflow: {challenged}')
+                return workflow_result
+            
+            # Additional validation: Check if members are still in guild
+            if not guild.get_member(challenger.id):
+                workflow_result['message'] = f"Challenger {getattr(challenger, 'name', 'Unknown')} not found in server"
+                logger.error(f'Challenger not in guild: {challenger.id}')
+                return workflow_result
+            
+            if challenged and not guild.get_member(challenged.id):
+                workflow_result['message'] = f"Target {getattr(challenged, 'name', 'Unknown')} not found in server"
+                logger.error(f'Challenged member not in guild: {challenged.id}')
+                return workflow_result
+            
+            # Safe member name access for logging
+            challenger_name = getattr(challenger, 'name', f'ID:{challenger.id}') if challenger else 'Unknown'
+            challenged_name = getattr(challenged, 'name', f'ID:{challenged.id}') if challenged else 'General'
+            
+            logger.info(f'Starting duel workflow: {challenge_type} challenge by {challenger_name} to {challenged_name}')
+            
             # Create challenge
             success, message, challenge_id = await self.challenge_system.create_challenge(
                 challenger=challenger,
@@ -70,40 +98,74 @@ class DuelWorkflows:
             
             if not success:
                 workflow_result['message'] = message
+                logger.error(f'Challenge creation failed: {message}')
                 return workflow_result
             
             workflow_result['challenge_created'] = True
             workflow_result['challenge_id'] = challenge_id
             
-            # Get challenge data for embed
-            challenge_data = await self.challenge_system.get_challenge_embed_data(challenge_id, guild)
-            if not challenge_data:
-                workflow_result['message'] = "Error retrieving challenge data"
+            # Get challenge data for embed with enhanced error handling
+            try:
+                challenge_data = await self.challenge_system.get_challenge_embed_data(challenge_id, guild)
+                if not challenge_data:
+                    workflow_result['message'] = "Error retrieving challenge data"
+                    logger.error(f'Failed to retrieve challenge data for challenge {challenge_id}')
+                    return workflow_result
+            except Exception as embed_error:
+                workflow_result['message'] = f"Error preparing challenge display: {str(embed_error)}"
+                logger.error(f'Challenge embed data error: {embed_error}')
                 return workflow_result
             
-            # Create challenge embed
-            embed = EmbedTemplates.challenge_embed(challenge_data, guild)
-            workflow_result['embed'] = embed
+            # Create challenge embed with safe member access
+            try:
+                embed = EmbedTemplates.challenge_embed(challenge_data, guild)
+                workflow_result['embed'] = embed
+            except Exception as embed_creation_error:
+                logger.error(f'Error creating challenge embed: {embed_creation_error}')
+                # Create fallback embed
+                embed = EmbedTemplates.create_base_embed(
+                    title=f"⚔️ {challenge_type.title()} Challenge",
+                    description=f"Challenge #{challenge_id} created by {challenger_name}",
+                    color=0xFF6B6B
+                )
+                workflow_result['embed'] = embed
             
             # Get ping role for general challenges
             if not challenged:
-                ping_role_id = await self.challenge_system.get_ping_role_for_challenge(
-                    challenge_type, challenger.id
-                )
-                if ping_role_id:
-                    ping_role = guild.get_role(ping_role_id)
-                    workflow_result['ping_role'] = ping_role
+                try:
+                    ping_role_id = await self.challenge_system.get_ping_role_for_challenge(
+                        challenge_type, challenger.id
+                    )
+                    if ping_role_id:
+                        ping_role = guild.get_role(ping_role_id)
+                        workflow_result['ping_role'] = ping_role
+                except Exception as ping_error:
+                    logger.warning(f'Failed to get ping role: {ping_error}')
+                    # Continue without ping role
             
             workflow_result['success'] = True
             workflow_result['message'] = "Challenge created successfully"
             
-            logger.info(f'Duel workflow completed: {challenge_type} challenge {challenge_id} by {challenger}')
+            logger.info(f'Duel workflow completed: {challenge_type} challenge {challenge_id} by {challenger_name}')
             
             return workflow_result
             
         except Exception as e:
-            logger.error(f'Error in duel workflow: {e}')
-            workflow_result['message'] = f"Error in duel workflow: {e}"
+            # Enhanced error logging with more context
+            challenger_info = f"challenger={getattr(challenger, 'name', 'Unknown')} (ID:{getattr(challenger, 'id', 'Unknown')})" if challenger else "challenger=None"
+            challenged_info = f"challenged={getattr(challenged, 'name', 'Unknown')} (ID:{getattr(challenged, 'id', 'Unknown')})" if challenged else "challenged=None"
+            
+            error_context = f"Error in duel workflow - Type: {challenge_type}, {challenger_info}, {challenged_info}"
+            logger.error(f'{error_context}: {e}')
+            
+            workflow_result = {
+                'success': False,
+                'message': f"Workflow error: {str(e)}",
+                'challenge_created': False,
+                'challenge_id': None,
+                'embed': None,
+                'ping_role': None
+            }
             return workflow_result
     
     async def process_challenge_acceptance(self, accepter: discord.Member, challenge_id: int,

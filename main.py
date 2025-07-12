@@ -3,7 +3,8 @@
 BladeBot - ROBLOX Linked Sword Dueling Bot
 Main entry point and bot initialization
 """
-
+from dotenv import load_dotenv
+load_dotenv()
 import discord
 from discord.ext import commands
 import logging
@@ -13,9 +14,6 @@ from pathlib import Path
 from systems.user_system import UserSystem
 from config import TIER_ROLES, RANK_ROLES
 from datetime import datetime, timedelta
-from dotenv import load_dotenv
-
-load_dotenv()
 
 # Add project root to Python path
 project_root = Path(__file__).parent

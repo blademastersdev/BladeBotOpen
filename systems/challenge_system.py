@@ -260,7 +260,7 @@ class ChallengeSystem:
     
     async def get_challenge_embed_data(self, challenge_id: int, guild: discord.Guild) -> Optional[Dict[str, Any]]:
         """
-        Get challenge data formatted for embed display
+        Get challenge data formatted for embed display with enhanced error handling
         
         Args:
             challenge_id: Challenge ID
@@ -269,33 +269,152 @@ class ChallengeSystem:
         Returns:
             Dictionary with embed data or None if not found
         """
-        challenge = await self.db.get_challenge(challenge_id)
-        if not challenge:
+        try:
+            challenge = await self.db.get_challenge(challenge_id)
+            if not challenge:
+                logger.warning(f'Challenge {challenge_id} not found in database')
+                return None
+            
+            # Safe member retrieval with validation
+            challenger = None
+            challenged = None
+            
+            try:
+                challenger = guild.get_member(challenge['challenger_id'])
+                if not challenger:
+                    logger.warning(f'Challenger {challenge["challenger_id"]} not found in guild {guild.id}')
+            except Exception as e:
+                logger.error(f'Error retrieving challenger {challenge["challenger_id"]}: {e}')
+            
+            try:
+                if challenge['challenged_id']:
+                    challenged = guild.get_member(challenge['challenged_id'])
+                    if not challenged:
+                        logger.warning(f'Challenged user {challenge["challenged_id"]} not found in guild {guild.id}')
+            except Exception as e:
+                logger.error(f'Error retrieving challenged user {challenge["challenged_id"]}: {e}')
+            
+            # Safe user data retrieval
+            challenger_user = None
+            challenged_user = None
+            
+            try:
+                challenger_user = await self.db.get_user(challenge['challenger_id'])
+            except Exception as e:
+                logger.error(f'Error retrieving challenger user data {challenge["challenger_id"]}: {e}')
+            
+            try:
+                if challenge['challenged_id']:
+                    challenged_user = await self.db.get_user(challenge['challenged_id'])
+            except Exception as e:
+                logger.error(f'Error retrieving challenged user data {challenge["challenged_id"]}: {e}')
+            
+            # Safe duel type access
+            duel_info = DUEL_TYPES.get(challenge['challenge_type'])
+            if not duel_info:
+                logger.error(f'Unknown challenge type: {challenge["challenge_type"]}')
+                duel_info = {'name': 'Unknown', 'description': 'Unknown duel type'}
+            
+            # Build embed data with safe attribute access
+            embed_data = {
+                'challenge_id': challenge_id,
+                'challenge_type': challenge['challenge_type'],
+                'duel_name': duel_info['name'],
+                'duel_description': duel_info['description'],
+                'challenger': challenger,
+                'challenged': challenged,
+                'created_at': challenge.get('created_at'),
+                'expires_at': challenge.get('expires_at')
+            }
+            
+            # Safe rank formatting with fallbacks
+            if challenger_user:
+                embed_data['challenger_rank'] = f"{challenger_user['tier']} {challenger_user['rank_numeral']}"
+            else:
+                embed_data['challenger_rank'] = "Unknown Rank"
+                
+            if challenged_user:
+                embed_data['challenged_rank'] = f"{challenged_user['tier']} {challenged_user['rank_numeral']}"
+            else:
+                embed_data['challenged_rank'] = "Unknown Rank" if challenge['challenged_id'] else "N/A"
+            
+            # Safe name access with fallbacks
+            if challenger:
+                embed_data['challenger_name'] = getattr(challenger, 'display_name', getattr(challenger, 'name', f'ID:{challenger.id}'))
+            else:
+                embed_data['challenger_name'] = f"Unknown User (ID: {challenge['challenger_id']})"
+                
+            if challenged:
+                embed_data['challenged_name'] = getattr(challenged, 'display_name', getattr(challenged, 'name', f'ID:{challenged.id}'))
+            else:
+                embed_data['challenged_name'] = f"Unknown User (ID: {challenge['challenged_id']})" if challenge['challenged_id'] else "Open Challenge"
+            
+            logger.info(f'Successfully retrieved embed data for challenge {challenge_id}')
+            return embed_data
+            
+        except Exception as e:
+            logger.error(f'Error in get_challenge_embed_data for challenge {challenge_id}: {e}')
             return None
+
+    def validate_member_object(member: Optional[discord.Member], context: str = "") -> tuple[bool, str]:
+        """
+        Validate a Discord Member object safely
         
-        challenger = guild.get_member(challenge['challenger_id'])
-        challenged = guild.get_member(challenge['challenged_id']) if challenge['challenged_id'] else None
+        Args:
+            member: Discord Member object to validate
+            context: Context string for logging
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        if not member:
+            return False, f"Member is None {context}"
         
-        challenger_user = await self.db.get_user(challenge['challenger_id'])
-        challenged_user = await self.db.get_user(challenge['challenged_id']) if challenge['challenged_id'] else None
-        
-        duel_info = DUEL_TYPES[challenge['challenge_type']]
-        
-        embed_data = {
-            'challenge_id': challenge_id,
-            'challenge_type': challenge['challenge_type'],
-            'duel_name': duel_info['name'],
-            'duel_description': duel_info['description'],
-            'challenger': challenger,
-            'challenged': challenged,
-            'challenger_rank': f"{challenger_user['tier']} {challenger_user['rank_numeral']}" if challenger_user else "Unknown",
-            'challenged_rank': f"{challenged_user['tier']} {challenged_user['rank_numeral']}" if challenged_user else "Unknown",
-            'expires_at': challenge['expires_at'],
-            'status': challenge['status']
-        }
-        
-        return embed_data
+        if not hasattr(member, 'id'):
+            return False, f"Member object missing id attribute {context}"
+            
+        if not hasattr(member, 'name'):
+            return False, f"Member object missing name attribute {context}"
+            
+        if getattr(member, 'bot', False):
+            return False, f"Member is a bot {context}"
+            
+        return True, "Valid member" 
     
+    async def safe_get_member(guild: discord.Guild, user_id: int, context: str = "") -> Optional[discord.Member]:
+        """
+        Safely retrieve a member from guild with enhanced error handling
+        
+        Args:
+            guild: Discord guild
+            user_id: User ID to retrieve
+            context: Context string for logging
+            
+        Returns:
+            Member object or None if not found/invalid
+        """
+        from challenge_system import validate_member_object
+        try:
+            if not guild:
+                logger.error(f"Guild is None when getting member {user_id} {context}")
+                return None
+                
+            member = guild.get_member(user_id)
+            if not member:
+                logger.warning(f"Member {user_id} not found in guild {guild.id} {context}")
+                return None
+                
+            is_valid, error_msg = validate_member_object(member, context)
+            if not is_valid:
+                logger.error(f"Invalid member object {user_id}: {error_msg} {context}")
+                return None
+                
+            return member
+            
+        except Exception as e:
+            logger.error(f"Error retrieving member {user_id} from guild {guild.id} {context}: {e}")
+            return None
+
     async def _validate_bm_challenge(self, challenger: discord.Member, 
                                    challenged: Optional[discord.Member]) -> Tuple[bool, str]:
         """
