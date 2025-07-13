@@ -1731,3 +1731,231 @@ class AdminCommands(commands.Cog):
             embed.add_field(name="📝 Notes", value=match_data['notes'], inline=False)
         
         await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['info'])
+
+    @commands.command(name='reserve')
+    async def manage_reserves(self, ctx, action: str = None, target: discord.Member = None):
+        """
+        Manage reserve users (Admin only)
+        Usage: ?reserve [list|move|restore] [@user]
+        """
+        from config import CLEANUP_TIMINGS
+        
+        if not self.has_admin_permissions(ctx.author):
+            embed = EmbedTemplates.error_embed(
+                "Permission Denied",
+                "You need admin permissions to manage reserves"
+            )
+            await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
+            return
+        
+        if not action:
+            embed = EmbedTemplates.create_base_embed(
+                title="🗃️ Reserve Management",
+                description="**Available Actions:**\n" +
+                        "`?reserve list` - View all reserve users\n" +
+                        "`?reserve move @user` - Move user to reserve\n" +
+                        "`?reserve restore @user` - Restore user from reserve\n" +
+                        "`?reserve sync` - Sync with server membership",
+                color=0x4169E1
+            )
+            await ctx.send(embed=embed)
+            return
+        
+        try:
+            if action.lower() == 'list':
+                reserve_users = await self.db.get_reserve_users()
+                
+                if not reserve_users:
+                    embed = EmbedTemplates.create_base_embed(
+                        title="🗃️ Reserve Users",
+                        description="No users currently in reserve",
+                        color=0x4169E1
+                    )
+                else:
+                    embed = EmbedTemplates.create_base_embed(
+                        title="🗃️ Reserve Users",
+                        description=f"Found {len(reserve_users)} users in reserve:",
+                        color=0x4169E1
+                    )
+                    
+                    reserve_text = ""
+                    for user in reserve_users[:20]:  # Limit for embed size
+                        reserve_text += f"**{user['username']}** - {user['tier']} {user['rank_numeral']} ({user['elo_rating']} ELO)\n"
+                    
+                    if len(reserve_users) > 20:
+                        reserve_text += f"\n... and {len(reserve_users) - 20} more"
+                    
+                    embed.add_field(
+                        name="📋 Users",
+                        value=reserve_text,
+                        inline=False
+                    )
+                
+                await ctx.send(embed=embed)
+                
+            elif action.lower() == 'move':
+                if not target:
+                    embed = EmbedTemplates.error_embed(
+                        "Missing Target",
+                        "Please specify a user to move to reserve"
+                    )
+                    await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
+                    return
+                
+                success = await self.user_system.move_user_to_reserve(
+                    target.id, f"Manual reserve by {ctx.author.display_name}"
+                )
+                
+                if success:
+                    embed = EmbedTemplates.create_base_embed(
+                        title="✅ User Moved to Reserve",
+                        description=f"**{target.display_name}** has been moved to reserve status",
+                        color=0x00FF00
+                    )
+                    await ctx.send(embed=embed)
+                    
+                    # Log to BMBot Logs
+                    try:
+                        from config import CHANNELS
+                        from datetime import datetime
+                        
+                        logs_channel = self.bot.get_channel(CHANNELS.get('bmbot_logs'))
+                        if logs_channel:
+                            log_embed = EmbedTemplates.create_base_embed(
+                                title="📋 User Moved to Reserve",
+                                description=f"**{target.display_name}** ({target.mention}) moved to reserve status",
+                                color=0xFFAA00
+                            )
+                            
+                            log_embed.add_field(
+                                name="👤 Action Details",
+                                value=f"**Admin:** {ctx.author.mention}\n" +
+                                    f"**Reason:** Manual admin action\n" +
+                                    f"**Guild:** {ctx.guild.name}",
+                                inline=False
+                            )
+                            
+                            log_embed.set_footer(text=f"Reserve action • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                            
+                            await logs_channel.send(embed=log_embed)
+                            
+                    except Exception as e:
+                        logger.error(f"Error logging reserve move to BMBot Logs: {e}")
+                else:
+                    embed = EmbedTemplates.error_embed(
+                        "Failed",
+                        f"Failed to move {target.display_name} to reserve"
+                    )
+                    await ctx.send(embed=embed)
+                
+            elif action.lower() == 'restore':
+                if not target:
+                    embed = EmbedTemplates.error_embed(
+                        "Missing Target",
+                        "Please specify a user to restore from reserve"
+                    )
+                    await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
+                    return
+                
+                success = await self.user_system.restore_user_from_reserve(
+                    target.id, f"Manual restore by {ctx.author.display_name}"
+                )
+                
+                if success:
+                    embed = EmbedTemplates.create_base_embed(
+                        title="✅ User Restored from Reserve",
+                        description=f"**{target.display_name}** has been restored to active status",
+                        color=0x00FF00
+                    )
+                    await ctx.send(embed=embed)
+                    
+                    # Log to BMBot Logs
+                    try:
+                        from config import CHANNELS
+                        from datetime import datetime
+                        
+                        logs_channel = self.bot.get_channel(CHANNELS.get('bmbot_logs'))
+                        if logs_channel:
+                            log_embed = EmbedTemplates.create_base_embed(
+                                title="📋 User Restored from Reserve",
+                                description=f"**{target.display_name}** ({target.mention}) restored to active status",
+                                color=0x00FF00
+                            )
+                            
+                            log_embed.add_field(
+                                name="👤 Action Details",
+                                value=f"**Admin:** {ctx.author.mention}\n" +
+                                    f"**Reason:** Manual admin action\n" +
+                                    f"**Guild:** {ctx.guild.name}",
+                                inline=False
+                            )
+                            
+                            log_embed.set_footer(text=f"Restore action • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                            
+                            await logs_channel.send(embed=log_embed)
+                            
+                    except Exception as e:
+                        logger.error(f"Error logging reserve restore to BMBot Logs: {e}")
+                else:
+                    embed = EmbedTemplates.error_embed(
+                        "Failed",
+                        f"Failed to restore {target.display_name} from reserve"
+                    )
+                    await ctx.send(embed=embed)
+                
+            elif action.lower() == 'sync':
+                stats = await self.user_system.sync_server_membership(ctx.guild)
+                
+                embed = EmbedTemplates.create_base_embed(
+                    title="🔄 Server Membership Sync Complete",
+                    description="Reserve status synchronized with server membership",
+                    color=0x00FF00
+                )
+                
+                embed.add_field(
+                    name="📊 Results",
+                    value=f"**Moved to Reserve:** {stats['moved_to_reserve']}\n" +
+                        f"**Restored from Reserve:** {stats['restored_from_reserve']}\n" +
+                        f"**Errors:** {stats['errors']}",
+                    inline=False
+                )
+                
+                await ctx.send(embed=embed)
+                
+                # Also log to BMBot Logs channel if there were changes
+                if stats['moved_to_reserve'] > 0 or stats['restored_from_reserve'] > 0 or stats['errors'] > 0:
+                    try:
+                        from config import CHANNELS
+                        from datetime import datetime
+                        
+                        logs_channel = self.bot.get_channel(CHANNELS.get('bmbot_logs'))
+                        if logs_channel:
+                            log_embed = EmbedTemplates.create_base_embed(
+                                title="🔄 Manual Server Sync",
+                                description=f"Server membership sync triggered by {ctx.author.mention}",
+                                color=0x4169E1
+                            )
+                            
+                            log_embed.add_field(
+                                name="📊 Results",
+                                value=f"**Guild:** {ctx.guild.name}\n" +
+                                    f"**Moved to Reserve:** {stats['moved_to_reserve']}\n" +
+                                    f"**Restored from Reserve:** {stats['restored_from_reserve']}\n" +
+                                    f"**Errors:** {stats['errors']}",
+                                inline=False
+                            )
+                            
+                            log_embed.set_footer(text=f"Manual sync • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                            
+                            await logs_channel.send(embed=log_embed)
+                            
+                    except Exception as e:
+                        logger.error(f"Error logging manual sync to BMBot Logs: {e}")
+                
+        except Exception as e:
+            logger.error(f'Error in reserve management: {e}')
+            embed = EmbedTemplates.error_embed(
+                "Error",
+                f"An error occurred: {str(e)}"
+            )
+            await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])

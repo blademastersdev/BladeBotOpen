@@ -253,7 +253,7 @@ class EmbedTemplates:
     
     @staticmethod
     def leaderboard_embed(leaderboard_data: List[Dict[str, Any]], title: str = "ELO Leaderboard") -> discord.Embed:
-        """Create a leaderboard embed"""
+        """Create a leaderboard embed with proper count handling"""
         embed = EmbedTemplates.create_base_embed(
             title=f"🏆 {title}",
             color=EMBED_COLORS['rank']
@@ -283,16 +283,19 @@ class EmbedTemplates:
         # Remaining users in a formatted list
         if len(leaderboard_data) > 3:
             remaining_text = ""
-            for i, user in enumerate(leaderboard_data[3:], 4):
-                if i > 15:  # Limit to prevent embed being too long
-                    remaining_text += f"\n... and {len(leaderboard_data) - 15} more"
-                    break
-                
+            count = len(leaderboard_data)
+            max_display = min(count, 25)  # Discord embed field limit
+            
+            for i, user in enumerate(leaderboard_data[3:max_display], 4):
                 remaining_text += (
                     f"**{i}.** {user['username']} - "
                     f"{user['tier']} {user['rank_numeral']} - "
                     f"{user['elo_rating']} ELO\n"
                 )
+            
+            # Only show "and X more" if we actually cut off results
+            if count > max_display:
+                remaining_text += f"\n... and {count - max_display} more"
             
             if remaining_text:
                 embed.add_field(

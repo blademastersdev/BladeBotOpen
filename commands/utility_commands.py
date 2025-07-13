@@ -85,11 +85,20 @@ class UtilityCommands(commands.Cog):
                 user_data = await self.user_system.get_user_profile(target.id)
                 logger.info(f"Auto-fixed rank for {target.display_name} during stats display")
             
+            # Get leaderboard position
+            leaderboard_rank = await self.user_system.get_user_leaderboard_rank(target.id)
+            
             # Create main stats embed
             rank_display = "Unranked" if user_data['tier'] in ['Guest', 'Evaluation'] or user_data['rank_numeral'] == 'N/A' else f"{user_data['tier']} {user_data['rank_numeral']}"
+            
+            # Enhanced description with rank placement
+            elo_text = f"ELO: **{user_data['elo_rating']}**"
+            if leaderboard_rank:
+                elo_text += f" • Rank **#{leaderboard_rank}**"
+            
             embed = EmbedTemplates.create_base_embed( 
                 title=f"📊 {target.display_name}'s Statistics",
-                description=f"**{rank_display}** • ELO: **{user_data['elo_rating']}**",
+                description=f"**{rank_display}** • {elo_text}",
                 color=0x4169E1
             )
             
@@ -110,53 +119,19 @@ class UtilityCommands(commands.Cog):
                 inline=True
             )
             
-            rank_text = "Unranked" if user_data['tier'] in ['Guest', 'Evaluation'] or user_data['rank_numeral'] == 'N/A' else f"{user_data['tier']} {user_data['rank_numeral']}"
-            embed.add_field(
-                name="🏆 Ranking",
-                value=f"**Tier:** {user_data['tier']}\n**Rank:** {rank_text}\n**ELO:** {user_data['elo_rating']}",
-                inline=True
-            )
-            
-            embed.add_field(
-                name="📅 Activity",
-                value=f"**Games Played:** {total_games}\n**Joined:** {user_data['joined_date'][:10]}",
-                inline=True
-            )
-            
-            # Recent activity
-            recent_matches = await self._get_recent_matches(target, limit=3)
-            if recent_matches:
-                recent_text = ""
-                for match in recent_matches:
-                    opponent_id = match['challenger_id'] if match['challenged_id'] == target.id else match['challenged_id']
-                    opponent = ctx.guild.get_member(opponent_id)
-                    opponent_name = opponent.display_name if opponent else "Unknown"
-                    
-                    result = "W" if match['winner_id'] == target.id else "L"
-                    match_date = datetime.fromisoformat(match['match_date']).strftime("%m/%d")
-                    
-                    recent_text += f"**{result}** vs {opponent_name} ({match_date})\n"
-                
+            # Add reserve status indicator if applicable
+            if user_data.get('status') == 'reserve':
                 embed.add_field(
-                    name="📈 Recent Matches",
-                    value=recent_text.strip(),
-                    inline=False
+                    name="📋 Status",
+                    value="**Reserve** (Not in server)",
+                    inline=True
                 )
             
-            # Interactive options
-            embed.add_field(
-                name="📋 View Options",
-                value="🔍 React with 🔍 to view detailed match history\n📊 React with 📊 to view extended statistics",
-                inline=False
-            )
-            
-            embed.set_footer(text=f"Requested by {ctx.author.display_name}")
-            
-            # Send without cleanup timer regardless of interaction
+            # Send main embed WITHOUT cleanup timer for persistence
             message = await ctx.send(embed=embed)
             
-            # Add reaction options for interactivity
-            await message.add_reaction('🔍')  # For match history
+            # Add reaction options for additional info
+            await message.add_reaction('🔍')  # For match logs
             await message.add_reaction('📊')  # For extended stats
             
             def check(reaction, user):
@@ -174,10 +149,8 @@ class UtilityCommands(commands.Cog):
                     pass
                     
                 if str(reaction.emoji) == '🔍':
-                    # Additional message also gets cleanup timer
                     await self.stats_logs(ctx, target)
                 elif str(reaction.emoji) == '📊':
-                    # Additional message also gets cleanup timer  
                     await self._show_extended_stats(ctx, target)
                     
             except asyncio.TimeoutError:
@@ -193,7 +166,7 @@ class UtilityCommands(commands.Cog):
                 "Error",
                 f"An error occurred while retrieving statistics: {str(e)}"
             )
-            await ctx.send(embed=embed)
+            await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
 
     @stats_command.command(name='logs', aliases=['history', 'matches'])
     async def stats_logs(self, ctx, target: Optional[discord.Member] = None, page: int = 1):

@@ -30,6 +30,7 @@ class Database:
             await self._create_tables(db)
             await db.commit()
         
+        await self._migrate_add_status_column()
         logger.info('Database initialization complete')
     
     async def _create_tables(self, db: aiosqlite.Connection):
@@ -174,7 +175,28 @@ class Database:
         await db.execute('CREATE INDEX IF NOT EXISTS idx_challenges_status ON challenges (status)')
         await db.execute('CREATE INDEX IF NOT EXISTS idx_challenges_user ON challenges (challenger_id, challenged_id)')
         await db.execute('CREATE INDEX IF NOT EXISTS idx_active_tickets_channel ON active_tickets (channel_id)')
-    
+
+    async def _migrate_add_status_column(self):
+        """Add status column for reserve system"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                # Check if status column exists
+                cursor = await db.execute("PRAGMA table_info(users)")
+                columns = [column[1] for column in await cursor.fetchall()]
+                
+                if 'status' not in columns:
+                    # Add status column with default 'active'
+                    await db.execute('ALTER TABLE users ADD COLUMN status TEXT DEFAULT "active"')
+                    
+                    # Update existing users to active status
+                    await db.execute('UPDATE users SET status = "active" WHERE status IS NULL')
+                    await db.commit()
+                    
+                    logger.info("Added status column for reserve system")
+                    
+        except Exception as e:
+            logger.error(f"Error adding status column: {e}")
+
     async def get_connection(self) -> aiosqlite.Connection:
         """Get a database connection"""
         return await aiosqlite.connect(self.db_path)
@@ -256,6 +278,50 @@ class Database:
                 return True
             return False
     
+    async def get_user_leaderboard_position(self, user_id: int) -> Optional[int]:
+        """Get user's position in the ELO leaderboard (1-indexed)"""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                '''SELECT COUNT(*) + 1 as position 
+                FROM users 
+                WHERE elo_rating > (
+                    SELECT elo_rating FROM users 
+                    WHERE discord_id = ? AND is_active = TRUE AND status = 'active'
+                ) AND is_active = TRUE AND status = 'active' ''',
+                (user_id,)
+            )
+            result = await cursor.fetchone()
+            
+            # Check if user exists and is active
+            cursor = await db.execute(
+                'SELECT discord_id FROM users WHERE discord_id = ? AND is_active = TRUE AND status = "active"',
+                (user_id,)
+            )
+            user_exists = await cursor.fetchone()
+            
+            return result[0] if result and user_exists else None
+
+    async def set_user_reserve_status(self, user_id: int, is_reserve: bool = True) -> bool:
+        """Set user's reserve status (for users who left the server)"""
+        status = 'reserve' if is_reserve else 'active'
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                'UPDATE users SET status = ? WHERE discord_id = ?',
+                (status, user_id)
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def get_reserve_users(self) -> List[Dict[str, Any]]:
+        """Get all users in reserve status"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                'SELECT * FROM users WHERE status = "reserve" ORDER BY username'
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
     async def get_users_by_rank(self, tier: str, numeral: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get all users in a specific rank"""
         async with aiosqlite.connect(self.db_path) as db:
@@ -276,11 +342,13 @@ class Database:
             return [dict(row) for row in rows]
     
     async def get_leaderboard(self, limit: int = 20) -> List[Dict[str, Any]]:
-        """Get ELO leaderboard"""
+        """Get ELO leaderboard (active users only, excluding reserves)"""
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                'SELECT * FROM users WHERE is_active = TRUE ORDER BY elo_rating DESC LIMIT ?',
+                '''SELECT * FROM users 
+                WHERE is_active = TRUE AND status = "active" 
+                ORDER BY elo_rating DESC LIMIT ?''',
                 (limit,)
             )
             rows = await cursor.fetchall()

@@ -14,6 +14,7 @@ from pathlib import Path
 from systems.user_system import UserSystem
 from config import TIER_ROLES, RANK_ROLES
 from datetime import datetime, timedelta
+from typing import Dict
 
 # Add project root to Python path
 project_root = Path(__file__).parent
@@ -75,6 +76,7 @@ class BladeBot(commands.Bot):
         
         logger.info('Ticket system initialized')
 
+        # Run startup rank validation
         logger.info('Running startup rank validation...')
         for guild in self.guilds:
             from systems.user_system import UserSystem
@@ -84,6 +86,34 @@ class BladeBot(commands.Bot):
                 if stats['fixed'] > 0:
                     logger.info(f"Startup validation: Fixed {stats['fixed']} user ranks")
 
+        # Run automatic server membership sync with logging
+        logger.info('Running startup server membership sync...')
+        sync_results = {}
+        
+        for guild in self.guilds:
+            try:
+                from systems.user_system import UserSystem
+                user_system = UserSystem(self.db)
+                sync_stats = await user_system.sync_server_membership(guild)
+                sync_results[guild.name] = sync_stats
+                
+                if sync_stats['moved_to_reserve'] > 0 or sync_stats['restored_from_reserve'] > 0:
+                    logger.info(
+                        f"Startup sync for {guild.name}: "
+                        f"Moved to reserve: {sync_stats['moved_to_reserve']}, "
+                        f"Restored from reserve: {sync_stats['restored_from_reserve']}, "
+                        f"Errors: {sync_stats['errors']}"
+                    )
+                else:
+                    logger.info(f"Startup sync for {guild.name}: No changes needed")
+                    
+            except Exception as e:
+                logger.error(f"Error during startup sync for {guild.name}: {e}")
+                sync_results[guild.name] = {'moved_to_reserve': 0, 'restored_from_reserve': 0, 'errors': 1}
+
+        # Send sync results to BMBot Logs channel
+        await self._log_startup_sync(sync_results)
+
         # Set bot status
         await self.change_presence(
             activity=discord.Activity(
@@ -91,6 +121,67 @@ class BladeBot(commands.Bot):
                 name="blade duels | ?help"
             )
         )
+        
+        logger.info('Bot startup complete!')
+
+    async def _log_startup_sync(self, sync_results: Dict[str, Dict[str, int]]):
+        """Send startup sync results to BMBot Logs channel"""
+        try:
+            from config import CHANNELS
+            from utils.embeds import EmbedTemplates
+            from datetime import datetime
+            
+            # Get BMBot Logs channel
+            logs_channel = self.get_channel(CHANNELS.get('bmbot_logs'))
+            if not logs_channel:
+                logger.warning("BMBot Logs channel not found")
+                return
+            
+            total_moved = sum(stats['moved_to_reserve'] for stats in sync_results.values())
+            total_restored = sum(stats['restored_from_reserve'] for stats in sync_results.values())
+            total_errors = sum(stats['errors'] for stats in sync_results.values())
+            
+            # Only log if there were changes or errors
+            if total_moved == 0 and total_restored == 0 and total_errors == 0:
+                return
+            
+            embed = EmbedTemplates.create_base_embed(
+                title="🤖 Bot Startup - Server Sync",
+                description="Server membership synchronization completed",
+                color=0x00FF00 if total_errors == 0 else 0xFFAA00
+            )
+            
+            embed.add_field(
+                name="📊 Summary",
+                value=f"**Moved to Reserve:** {total_moved}\n"
+                    f"**Restored from Reserve:** {total_restored}\n"
+                    f"**Errors:** {total_errors}",
+                inline=True
+            )
+            
+            # Add guild details if changes occurred
+            if total_moved > 0 or total_restored > 0:
+                guild_details = []
+                for guild_name, stats in sync_results.items():
+                    if stats['moved_to_reserve'] > 0 or stats['restored_from_reserve'] > 0:
+                        guild_details.append(
+                            f"**{guild_name}:** {stats['moved_to_reserve']}→Reserve, {stats['restored_from_reserve']}←Active"
+                        )
+                
+                if guild_details:
+                    embed.add_field(
+                        name="🔍 Details",
+                        value="\n".join(guild_details[:5]),  # Limit to 5 guilds max
+                        inline=False
+                    )
+            
+            embed.set_footer(text=f"Sync completed • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            
+            await logs_channel.send(embed=embed)
+            logger.info("Startup sync results logged to BMBot Logs channel")
+            
+        except Exception as e:
+            logger.error(f"Error logging startup sync to BMBot Logs: {e}")
 
     async def on_command_error(self, ctx, error):
         """Global error handler"""

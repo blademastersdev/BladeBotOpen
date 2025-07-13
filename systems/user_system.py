@@ -289,6 +289,72 @@ class UserSystem:
             logger.error(f'Error updating Discord roles for user {user_id}: {e}')
             return False
     
+    async def get_user_leaderboard_rank(self, user_id: int) -> Optional[int]:
+        """Get user's current leaderboard ranking position"""
+        return await self.db.get_user_leaderboard_position(user_id)
+
+    async def move_user_to_reserve(self, user_id: int, reason: str = "Left server") -> bool:
+        """Move user to reserve status (hides from public displays)"""
+        success = await self.db.set_user_reserve_status(user_id, is_reserve=True)
+        if success:
+            await self.db.log_action('user_reserved', user_id, f'Reason: {reason}')
+            logger.info(f'Moved user {user_id} to reserve status: {reason}')
+        return success
+
+    async def restore_user_from_reserve(self, user_id: int, reason: str = "Returned to server") -> bool:
+        """Restore user from reserve to active status"""
+        success = await self.db.set_user_reserve_status(user_id, is_reserve=False)
+        if success:
+            await self.db.log_action('user_restored', user_id, f'Reason: {reason}')
+            logger.info(f'Restored user {user_id} from reserve status: {reason}')
+        return success
+
+    async def sync_server_membership(self, guild: discord.Guild) -> Dict[str, int]:
+        """Sync user reserve status based on server membership"""
+        stats = {'moved_to_reserve': 0, 'restored_from_reserve': 0, 'errors': 0}
+        
+        try:
+            # Get all active users from database
+            async with aiosqlite.connect(self.db.db_path) as db:
+                db.row_factory = aiosqlite.Row
+                cursor = await db.execute(
+                    'SELECT discord_id, status FROM users WHERE is_active = TRUE'
+                )
+                all_users = await cursor.fetchall()
+            
+            guild_member_ids = {member.id for member in guild.members}
+            
+            for user_row in all_users:
+                user_id = user_row['discord_id']
+                current_status = user_row['status']
+                
+                # Check if user is in server
+                is_in_server = user_id in guild_member_ids
+                
+                if is_in_server and current_status == 'reserve':
+                    # User returned to server - restore from reserve
+                    if await self.restore_user_from_reserve(user_id, "Returned to server"):
+                        stats['restored_from_reserve'] += 1
+                    else:
+                        stats['errors'] += 1
+                        
+                elif not is_in_server and current_status == 'active':
+                    # User left server - move to reserve
+                    if await self.move_user_to_reserve(user_id, "Left server"):
+                        stats['moved_to_reserve'] += 1
+                    else:
+                        stats['errors'] += 1
+            
+            if stats['moved_to_reserve'] > 0 or stats['restored_from_reserve'] > 0:
+                logger.info(f"Server membership sync: {stats}")
+            
+            return stats
+            
+        except Exception as e:
+            logger.error(f'Error syncing server membership: {e}')
+            stats['errors'] += 1
+            return stats
+
     async def get_user_duel_history(self, user_id: int, limit: int = 20) -> List[Dict[str, Any]]:
         """
         Get user's duel history with enhanced information
