@@ -144,6 +144,78 @@ class AdminCommands(commands.Cog):
                 )
                 await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
 
+    def _validate_score_format(self, score_input: str) -> bool:
+        """
+        Validate score format as #-# (e.g., 3-2, 10-7, etc.)
+        Returns True if valid format, False otherwise
+        """
+        import re
+        if not score_input:
+            return False
+        # Pattern: one or more digits, dash, one or more digits
+        pattern = r'^\d+-\d+$'
+        return bool(re.match(pattern, score_input.strip()))
+
+    async def _get_score_with_validation(self, ctx):
+        """
+        Get score input with format validation and exit option
+        Returns: (score, should_exit)
+        """
+        from config import CLEANUP_TIMINGS
+        
+        embed = EmbedTemplates.create_base_embed(
+            title="📊 Match Score",
+            description="What was the score?\n\n" +
+                    "**Format:** Use format like `3-2` or `10-7`\n" +
+                    "**Options:** Type `skip` for no score, or `exit` to cancel",
+            color=0x4169E1
+        )
+        await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['confirmation'])
+        
+        def score_check(message):
+            return (message.author == ctx.author and 
+                    message.channel == ctx.channel)
+        
+        while True:  # Loop until valid input or exit
+            try:
+                score_msg = await self.bot.wait_for('message', timeout=60.0, check=score_check)
+                score_input = score_msg.content.strip().lower()
+                
+                # Handle exit commands
+                if score_input in ['exit', 'cancel', 'quit']:
+                    embed = EmbedTemplates.create_base_embed(
+                        title="❌ Recording Cancelled",
+                        description="Match recording has been cancelled.",
+                        color=0xFF0000
+                    )
+                    await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
+                    return None, True  # Signal to exit
+                
+                # Handle skip
+                if score_input == 'skip':
+                    return None, False  # No score, but continue
+                
+                # Validate score format
+                if self._validate_score_format(score_msg.content.strip()):
+                    return score_msg.content.strip(), False  # Valid score, continue
+                else:
+                    # Invalid format - show error and ask again
+                    embed = EmbedTemplates.error_embed(
+                        "Invalid Format",
+                        "Score must be in format `#-#` (e.g., `3-2`, `10-7`)\n" +
+                        "Type `skip` for no score, or `exit` to cancel"
+                    )
+                    await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
+                    # Loop continues for another attempt
+                    
+            except asyncio.TimeoutError:
+                embed = EmbedTemplates.error_embed(
+                    "Timeout", 
+                    "Score input timed out. Recording cancelled."
+                )
+                await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
+                return None, True  # Signal to exit
+
     @log_command.command(name='duel', aliases=['record', 'rd'])
     async def log_duel(self, ctx, winner: Optional[discord.Member] = None, *, score_and_notes: str = ""):
         """
@@ -215,80 +287,138 @@ class AdminCommands(commands.Cog):
             if not winner:
                 embed = EmbedTemplates.create_base_embed(
                     title="⚔️ Select Winner",
-                    description=f"Who won this {duel_type} duel?",
+                    description=f"Who won this {duel_type} duel?\n\n" +
+                            f"1️⃣ {challenger.display_name}\n" +
+                            f"2️⃣ {challenged.display_name}\n\n" +
+                            "Or type `exit` to cancel recording",
                     color=0x4169E1
                 )
                 
-                embed.add_field(
-                    name="🥇 Participants",
-                    value=f"1️⃣ {challenger.mention}\n2️⃣ {challenged.mention}",
-                    inline=False
-                )
-                
-                message = await ctx.send(embed=embed)
-                await message.add_reaction('1️⃣')
-                await message.add_reaction('2️⃣')
+                message = await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['confirmation'])
+                await message.add_reaction("1️⃣")
+                await message.add_reaction("2️⃣")
                 
                 def check(reaction, user):
                     return (user == ctx.author and 
-                        str(reaction.emoji) in ['1️⃣', '2️⃣'] and 
+                        str(reaction.emoji) in ["1️⃣", "2️⃣"] and 
                         reaction.message.id == message.id)
                 
+                # Also check for exit message
+                def exit_check(message):
+                    return (message.author == ctx.author and 
+                            message.channel == ctx.channel and
+                            message.content.strip().lower() in ['exit', 'cancel', 'quit'])
+                
                 try:
-                    reaction, user = await self.bot.wait_for('reaction_add', timeout=60.0, check=check)
+                    # Wait for either reaction or exit message
+                    done, pending = await asyncio.wait([
+                        asyncio.create_task(self.bot.wait_for('reaction_add', timeout=60.0, check=check)),
+                        asyncio.create_task(self.bot.wait_for('message', timeout=60.0, check=exit_check))
+                    ], return_when=asyncio.FIRST_COMPLETED)
                     
-                    if str(reaction.emoji) == '1️⃣':
+                    # Cancel remaining tasks
+                    for task in pending:
+                        task.cancel()
+                    
+                    result = done.pop().result()
+                    
+                    # Check if it was an exit message
+                    if isinstance(result, discord.Message):
+                        embed = EmbedTemplates.create_base_embed(
+                            title="❌ Recording Cancelled",
+                            description="Match recording has been cancelled.",
+                            color=0xFF0000
+                        )
+                        await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
+                        return
+                    
+                    # It was a reaction
+                    reaction, user = result
+                    if str(reaction.emoji) == "1️⃣":
                         winner = challenger
-                    elif str(reaction.emoji) == '2️⃣':
+                    else:
                         winner = challenged
                         
-                    await message.delete()
-                    
                 except asyncio.TimeoutError:
-                    await message.delete()
                     embed = EmbedTemplates.error_embed("Timeout", "Winner selection timed out")
                     await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
                     return
             
-            # Parse score and notes
+            # Parse score from score_and_notes parameter first
             score = None
-            notes = None
+            notes = ""
+            
             if score_and_notes:
-                parts = score_and_notes.split(' ', 1)
-                if parts[0] and any(char.isdigit() or char in '-:' for char in parts[0]):
-                    score = parts[0]
-                    notes = parts[1] if len(parts) > 1 else None
-                else:
-                    notes = score_and_notes
-
-            # If no score provided, prompt for it
+                parts = score_and_notes.split()
+                if parts:
+                    # Look for note indicators
+                    note_indicators = ['note:', 'notes:', 'note', 'notes']
+                    score_parts = []
+                    notes_parts = []
+                    found_note_indicator = False
+                    
+                    for part in parts:
+                        if not found_note_indicator and part.lower() in note_indicators:
+                            found_note_indicator = True
+                            continue
+                        
+                        if found_note_indicator:
+                            notes_parts.append(part)
+                        else:
+                            score_parts.append(part)
+                    
+                    if score_parts:
+                        potential_score = ' '.join(score_parts)
+                        # Validate format if provided via parameter
+                        if self._validate_score_format(potential_score):
+                            score = potential_score
+                    if notes_parts:
+                        notes = ' '.join(notes_parts)
+            
+            # If no valid score from parameters, prompt for it
             if not score:
+                score, should_exit = await self._get_score_with_validation(ctx)
+                if should_exit:
+                    return
+            
+            # Get notes if not provided
+            if not notes:
                 embed = EmbedTemplates.create_base_embed(
-                    title="📊 Match Score",
-                    description="What was the score? (type 'skip' for no score)",
+                    title="📝 Additional Notes",
+                    description="Any additional notes for this match?\n\nType `none` for no notes, or `exit` to cancel",
                     color=0x4169E1
                 )
                 await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['confirmation'])
                 
-                def score_check(message):
+                def notes_check(message):
                     return (message.author == ctx.author and 
                         message.channel == ctx.channel)
                 
                 try:
-                    score_msg = await self.bot.wait_for('message', timeout=60.0, check=score_check)
-                    score_input = score_msg.content.strip()
+                    notes_msg = await self.bot.wait_for('message', timeout=60.0, check=notes_check)
+                    notes_input = notes_msg.content.strip()
                     
-                    if score_input.lower() != 'skip':
-                        score = score_input
+                    # Check for exit
+                    if notes_input.lower() in ['exit', 'cancel', 'quit']:
+                        embed = EmbedTemplates.create_base_embed(
+                            title="❌ Recording Cancelled",
+                            description="Match recording has been cancelled.",
+                            color=0xFF0000
+                        )
+                        await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
+                        return
+                    
+                    if notes_input.lower() != 'none':
+                        notes = notes_input
                         
                 except asyncio.TimeoutError:
-                    pass  # Continue without score
+                    notes = ""  # Continue with no notes
             
-            # Ensure users are registered
+            # Ensure both users are registered
             await self.user_system.ensure_user_registered(challenger)
             await self.user_system.ensure_user_registered(challenged)
             
-            # Import and create DuelWorkflows instance (same pattern as _record_manual)
+            # Import and create DuelWorkflows instance
             from workflows.duel_workflows import DuelWorkflows
             duel_workflows = DuelWorkflows(self.bot)
             
@@ -304,217 +434,166 @@ class AdminCommands(commands.Cog):
                 guild=ctx.guild
             )
             
-            if recording_result['success']:
-                # Send result embed (persistent - contains match data)
-                if recording_result.get('result_embed'):
-                    await ctx.send(embed=recording_result['result_embed'])
+            if recording_result and recording_result.get('success'):
+                # Send success confirmation
+                embed = EmbedTemplates.create_base_embed(
+                    title="✅ Match Recorded Successfully",
+                    description=f"**{duel_type.title()} Duel** recorded between {challenger.mention} and {challenged.mention}",
+                    color=0x00FF00
+                )
                 
-                # Send admin notification if needed (persistent for admin action tracking)
-                if recording_result.get('admin_notification_embed'):
-                    await ctx.send(embed=recording_result['admin_notification_embed'])
+                embed.add_field(
+                    name="🏆 Winner",
+                    value=winner.mention,
+                    inline=True
+                )
                 
-                # Send notifications
-                await duel_workflows.send_match_notifications(recording_result, ctx.guild)
+                if score:
+                    embed.add_field(
+                        name="📊 Score",
+                        value=score,
+                        inline=True
+                    )
                 
+                if 'match_id' in recording_result:
+                    embed.add_field(
+                        name="🔍 Match ID",
+                        value=f"`{recording_result['match_id']}`",
+                        inline=True
+                    )
+                
+                if notes:
+                    embed.add_field(
+                        name="📝 Notes",
+                        value=notes,
+                        inline=False
+                    )
+                
+                embed.set_footer(text=f"Recorded by {ctx.author.display_name}")
+                
+                await ctx.send(embed=embed)
             else:
+                # Handle recording failure
+                error_msg = recording_result.get('error', 'Unknown error occurred') if recording_result else 'Recording failed'
                 embed = EmbedTemplates.error_embed(
                     "Recording Failed",
-                    recording_result.get('message', 'Unknown error occurred')
+                    f"Failed to record match: {error_msg}"
                 )
                 await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
-                
+            
         except Exception as e:
-            logger.error(f'Error recording from ticket: {e}')
+            logger.error(f'Error in _record_from_ticket: {e}')
             embed = EmbedTemplates.error_embed(
                 "Error",
-                f"An error occurred while recording the match: {str(e)}"
+                f"An error occurred while recording the duel: {str(e)}"
             )
             await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
 
     async def _record_manual(self, ctx, winner, score_and_notes):
-        """Manual recording with full interactive prompts when not in a ticket channel"""
+        """Manual duel recording with full interactive workflow"""
+        from config import CLEANUP_TIMINGS
+        
         try:
-            # Import Validators for user parsing
-            from utils.validators import Validators
+            # Step 1: Get challenger
+            embed = EmbedTemplates.create_base_embed(
+                title="👤 Select Challenger",
+                description="**Step 1:** Who was the challenger? (mention user or type name)\nType `exit` to cancel",
+                color=0x4169E1
+            )
+            await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['confirmation'])
             
-            # Helper method to parse user input (mention or username)
-            async def parse_user_input(user_input: str) -> Optional[discord.Member]:
-                user_input = user_input.strip()
+            def user_check(message):
+                return (message.author == ctx.author and 
+                    message.channel == ctx.channel)
+            
+            try:
+                challenger_msg = await self.bot.wait_for('message', timeout=60.0, check=user_check)
+                challenger_input = challenger_msg.content.strip()
                 
-                # First try as mention
-                is_valid, member, error = Validators.validate_mention(user_input, ctx.guild)
-                if is_valid and member:
-                    return member
-                
-                # If not a mention, try to find by username or display name
-                for member in ctx.guild.members:
-                    if member.bot:
-                        continue
-                    if (member.name.lower() == user_input.lower() or 
-                        member.display_name.lower() == user_input.lower()):
-                        return member
-                
-                # Try partial matching
-                matches = []
-                for member in ctx.guild.members:
-                    if member.bot:
-                        continue
-                    if (user_input.lower() in member.name.lower() or 
-                        user_input.lower() in member.display_name.lower()):
-                        matches.append(member)
-                
-                if len(matches) == 1:
-                    return matches[0]
-                elif len(matches) > 1:
-                    # Multiple matches - let user choose
-                    match_text = "\n".join([f"{i+1}. {m.display_name}" for i, m in enumerate(matches[:5])])
+                # Check for exit
+                if challenger_input.lower() in ['exit', 'cancel', 'quit']:
                     embed = EmbedTemplates.create_base_embed(
-                        title="Multiple Users Found",
-                        description=f"Multiple users match '{user_input}':\n{match_text}\n\nPlease be more specific or use a mention.",
-                        color=0xFFAA00
+                        title="❌ Recording Cancelled",
+                        description="Match recording has been cancelled.",
+                        color=0xFF0000
                     )
                     await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
-                    return None
+                    return
                 
-                return None
+                # Parse challenger
+                challenger = Validators.validate_mention(challenger_input, ctx.guild)
+                if not challenger:
+                    # Try username search as fallback
+                    challenger = discord.utils.find(
+                        lambda m: challenger_input.lower() in m.display_name.lower(),
+                        ctx.guild.members
+                    )
+                
+                if not challenger:
+                    embed = EmbedTemplates.error_embed(
+                        "User Not Found",
+                        f"Could not find user: {challenger_input}"
+                    )
+                    await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
+                    return
+                    
+            except asyncio.TimeoutError:
+                embed = EmbedTemplates.error_embed("Timeout", "Challenger selection timed out")
+                await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
+                return
             
-            # Step 1: Get challenger and challenged if not provided
-            challenger = None
-            challenged = None
-            
-            if not winner:
-                # Need to get both participants manually
-                embed = EmbedTemplates.create_base_embed(
-                    title="🥊 Match Recording",
-                    description="**Step 1:** Who was the challenger? (@mention or username)",
-                    color=0x4169E1
-                )
-                
-                await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['confirmation'])
-                
-                def user_check(message):
-                    return (message.author == ctx.author and 
-                        message.channel == ctx.channel)
-                
-                try:
-                    challenger_msg = await self.bot.wait_for('message', timeout=60.0, check=user_check)
-                    challenger = await parse_user_input(challenger_msg.content)
-                    if not challenger:
-                        embed = EmbedTemplates.error_embed("Invalid User", "Could not find that user")
-                        await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
-                        return
-                        
-                except asyncio.TimeoutError:
-                    embed = EmbedTemplates.error_embed("Timeout", "User input timed out")
-                    await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
-                    return
-                
-                # Step 2: Get challenged
-                embed = EmbedTemplates.create_base_embed(
-                    title="🥊 Match Recording", 
-                    description="**Step 2:** Who was challenged? (@mention or username)",
-                    color=0x4169E1
-                )
-                
-                await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['confirmation'])
-                
-                try:
-                    challenged_msg = await self.bot.wait_for('message', timeout=60.0, check=user_check)
-                    challenged = await parse_user_input(challenged_msg.content)
-                    if not challenged:
-                        embed = EmbedTemplates.error_embed("Invalid User", "Could not find that user")
-                        await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
-                        return
-                        
-                except asyncio.TimeoutError:
-                    embed = EmbedTemplates.error_embed("Timeout", "User input timed out")
-                    await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
-                    return
-                
-                # Step 3: Get winner
-                embed = EmbedTemplates.create_base_embed(
-                    title="🥊 Match Recording",
-                    description=f"**Step 3:** Who won?\n\n1️⃣ {challenger.display_name}\n2️⃣ {challenged.display_name}\n\nReact with 1️⃣ or 2️⃣",
-                    color=0x4169E1
-                )
-                
-                winner_msg = await ctx.send(embed=embed)
-                await winner_msg.add_reaction("1️⃣")
-                await winner_msg.add_reaction("2️⃣")
-                
-                def reaction_check(reaction, user):
-                    return (user == ctx.author and 
-                        str(reaction.emoji) in ["1️⃣", "2️⃣"] and 
-                        reaction.message.id == winner_msg.id)
-                
-                try:
-                    reaction, user = await self.bot.wait_for('reaction_add', timeout=60.0, check=reaction_check)
-                    if str(reaction.emoji) == "1️⃣":
-                        winner = challenger
-                    else:
-                        winner = challenged
-                        
-                except asyncio.TimeoutError:
-                    embed = EmbedTemplates.error_embed("Timeout", "Winner selection timed out")
-                    await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
-                    return
-            else:
-                # Winner was provided, need to get challenger and challenged
-                embed = EmbedTemplates.create_base_embed(
-                    title="🥊 Match Recording",
-                    description="**Step 1:** Who was the challenger? (@mention or username)",
-                    color=0x4169E1
-                )
-                
-                await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['confirmation'])
-                
-                def user_check(message):
-                    return (message.author == ctx.author and 
-                        message.channel == ctx.channel)
-                
-                try:
-                    challenger_msg = await self.bot.wait_for('message', timeout=60.0, check=user_check)
-                    challenger = await parse_user_input(challenger_msg.content)
-                    if not challenger:
-                        embed = EmbedTemplates.error_embed("Invalid User", "Could not find that user")
-                        await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
-                        return
-                        
-                except asyncio.TimeoutError:
-                    embed = EmbedTemplates.error_embed("Timeout", "User input timed out")
-                    await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
-                    return
-                
-                # Determine challenged (the other participant)
-                embed = EmbedTemplates.create_base_embed(
-                    title="🥊 Match Recording",
-                    description="**Step 2:** Who was challenged? (@mention or username)",
-                    color=0x4169E1
-                )
-                
-                await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['confirmation'])
-                
-                try:
-                    challenged_msg = await self.bot.wait_for('message', timeout=60.0, check=user_check)
-                    challenged = await parse_user_input(challenged_msg.content)
-                    if not challenged:
-                        embed = EmbedTemplates.error_embed("Invalid User", "Could not find that user")
-                        await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
-                        return
-                        
-                except asyncio.TimeoutError:
-                    embed = EmbedTemplates.error_embed("Timeout", "User input timed out")
-                    await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
-                    return
-            
-            # Step 4: Get duel type
+            # Step 2: Get challenged
             embed = EmbedTemplates.create_base_embed(
-                title="🥊 Match Recording",
-                description="**Step 3:** What type of duel was this?\n\n1️⃣ Official (ELO only)\n2️⃣ BM (ELO + Rank)\n\nReact with 1️⃣ or 2️⃣",
+                title="🎯 Select Challenged",
+                description="**Step 2:** Who was challenged? (mention user or type name)\nType `exit` to cancel",
+                color=0x4169E1
+            )
+            await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['confirmation'])
+            
+            try:
+                challenged_msg = await self.bot.wait_for('message', timeout=60.0, check=user_check)
+                challenged_input = challenged_msg.content.strip()
+                
+                # Check for exit
+                if challenged_input.lower() in ['exit', 'cancel', 'quit']:
+                    embed = EmbedTemplates.create_base_embed(
+                        title="❌ Recording Cancelled",
+                        description="Match recording has been cancelled.",
+                        color=0xFF0000
+                    )
+                    await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
+                    return
+                
+                # Parse challenged
+                challenged = Validators.validate_mention(challenged_input, ctx.guild)
+                if not challenged:
+                    # Try username search as fallback
+                    challenged = discord.utils.find(
+                        lambda m: challenged_input.lower() in m.display_name.lower(),
+                        ctx.guild.members
+                    )
+                
+                if not challenged:
+                    embed = EmbedTemplates.error_embed(
+                        "User Not Found",
+                        f"Could not find user: {challenged_input}"
+                    )
+                    await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
+                    return
+                    
+            except asyncio.TimeoutError:
+                embed = EmbedTemplates.error_embed("Timeout", "Challenged selection timed out")
+                await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
+                return
+            
+            # Step 3: Get duel type
+            embed = EmbedTemplates.create_base_embed(
+                title="⚔️ Duel Type",
+                description="**Step 3:** What type of duel was this?\n\n1️⃣ Official Duel\n2️⃣ Blademaster Duel",
                 color=0x4169E1
             )
             
-            type_msg = await ctx.send(embed=embed)
+            type_msg = await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['confirmation'])
             await type_msg.add_reaction("1️⃣")
             await type_msg.add_reaction("2️⃣")
             
@@ -535,12 +614,40 @@ class AdminCommands(commands.Cog):
                 await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
                 return
             
-            # Parse score and notes from score_and_notes parameter
+            # Step 4: Get winner (if not provided)
+            if not winner:
+                embed = EmbedTemplates.create_base_embed(
+                    title="🏆 Select Winner",
+                    description=f"**Step 4:** Who won the duel?\n\n1️⃣ {challenger.display_name}\n2️⃣ {challenged.display_name}",
+                    color=0x4169E1
+                )
+                
+                winner_msg = await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['confirmation'])
+                await winner_msg.add_reaction("1️⃣")
+                await winner_msg.add_reaction("2️⃣")
+                
+                def winner_reaction_check(reaction, user):
+                    return (user == ctx.author and 
+                        str(reaction.emoji) in ["1️⃣", "2️⃣"] and 
+                        reaction.message.id == winner_msg.id)
+                
+                try:
+                    reaction, user = await self.bot.wait_for('reaction_add', timeout=60.0, check=winner_reaction_check)
+                    if str(reaction.emoji) == "1️⃣":
+                        winner = challenger
+                    else:
+                        winner = challenged
+                        
+                except asyncio.TimeoutError:
+                    embed = EmbedTemplates.error_embed("Timeout", "Winner selection timed out")
+                    await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
+                    return
+            
+            # Parse score from score_and_notes parameter first
             score = None
-            notes = None
+            notes = ""
             
             if score_and_notes:
-                # Simple parsing - everything before first occurrence of note indicators
                 parts = score_and_notes.split()
                 if parts:
                     # Look for note indicators
@@ -560,41 +667,24 @@ class AdminCommands(commands.Cog):
                             score_parts.append(part)
                     
                     if score_parts:
-                        score = ' '.join(score_parts)
+                        potential_score = ' '.join(score_parts)
+                        # Validate format if provided via parameter
+                        if self._validate_score_format(potential_score):
+                            score = potential_score
                     if notes_parts:
                         notes = ' '.join(notes_parts)
             
-            # Step 5: Get score if not already provided
+            # Step 5: Get score if not provided
             if not score:
-                embed = EmbedTemplates.create_base_embed(
-                    title="📊 Match Score",
-                    description="**Step 4:** What was the score? (type 'skip' for no score)",
-                    color=0x4169E1
-                )
-                
-                await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['confirmation'])
-                
-                def score_check(message):
-                    return (message.author == ctx.author and 
-                        message.channel == ctx.channel)
-                
-                try:
-                    score_msg = await self.bot.wait_for('message', timeout=60.0, check=score_check)
-                    score_input = score_msg.content.strip()
-                    
-                    if score_input.lower() != 'skip':
-                        score = score_input
-                        
-                except asyncio.TimeoutError:
-                    embed = EmbedTemplates.error_embed("Timeout", "Score input timed out")
-                    await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
+                score, should_exit = await self._get_score_with_validation(ctx)
+                if should_exit:
                     return
             
-            # Step 6: Get notes if not already provided
+            # Step 6: Get notes if not provided
             if not notes:
                 embed = EmbedTemplates.create_base_embed(
-                    title="📝 Match Notes",
-                    description="**Step 5:** Any additional notes? (type 'none' for no notes)",
+                    title="📝 Additional Notes",
+                    description="**Step 5:** Any additional notes? (type 'none' for no notes or 'exit' to cancel)",
                     color=0x4169E1
                 )
                 
@@ -607,6 +697,16 @@ class AdminCommands(commands.Cog):
                 try:
                     notes_msg = await self.bot.wait_for('message', timeout=60.0, check=notes_check)
                     notes_input = notes_msg.content.strip()
+                    
+                    # Check for exit
+                    if notes_input.lower() in ['exit', 'cancel', 'quit']:
+                        embed = EmbedTemplates.create_base_embed(
+                            title="❌ Recording Cancelled",
+                            description="Match recording has been cancelled.",
+                            color=0xFF0000
+                        )
+                        await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
+                        return
                     
                     if notes_input.lower() != 'none':
                         notes = notes_input
@@ -635,38 +735,59 @@ class AdminCommands(commands.Cog):
                 guild=ctx.guild
             )
             
-            if recording_result.get('success'):
-                # Send the detailed result embed (persistent - contains match data)
-                if recording_result.get('result_embed'):
-                    await ctx.send(embed=recording_result['result_embed'])
-                else:
-                    # Fallback simple success message (confirmation - temporary)
-                    embed = EmbedTemplates.create_base_embed(
-                        title="✅ Match Recorded Successfully",
-                        description=f"**{duel_type.title()} Duel** recorded\nMatch ID: {recording_result.get('match_id', 'Unknown')}",
-                        color=0x00FF00
+            if recording_result and recording_result.get('success'):
+                # Send success confirmation
+                embed = EmbedTemplates.create_base_embed(
+                    title="✅ Match Recorded Successfully",
+                    description=f"**{duel_type.title()} Duel** recorded between {challenger.mention} and {challenged.mention}",
+                    color=0x00FF00
+                )
+                
+                embed.add_field(
+                    name="🏆 Winner",
+                    value=winner.mention,
+                    inline=True
+                )
+                
+                if score:
+                    embed.add_field(
+                        name="📊 Score",
+                        value=score,
+                        inline=True
                     )
-                    await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['admin'])
                 
-                # Send admin notification if applicable (persistent for admin tracking)
-                if recording_result.get('admin_notification_embed'):
-                    await ctx.send(embed=recording_result['admin_notification_embed'])
+                if 'match_id' in recording_result:
+                    embed.add_field(
+                        name="🔍 Match ID",
+                        value=f"`{recording_result['match_id']}`",
+                        inline=True
+                    )
                 
-                # Send notifications to duel logs channel
-                await duel_workflows.send_match_notifications(recording_result, ctx.guild)
-                    
+                if notes:
+                    embed.add_field(
+                        name="📝 Notes",
+                        value=notes,
+                        inline=False
+                    )
+                
+                embed.set_footer(text=f"Recorded by {ctx.author.display_name}")
+                
+                await ctx.send(embed=embed)
+                
             else:
+                # Handle recording failure
+                error_msg = recording_result.get('error', 'Unknown error occurred') if recording_result else 'Recording failed'
                 embed = EmbedTemplates.error_embed(
                     "Recording Failed",
-                    recording_result.get('message', 'Unknown error occurred')
+                    f"Failed to record match: {error_msg}"
                 )
                 await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
-                
+            
         except Exception as e:
-            logger.error(f'Error in manual recording: {e}')
+            logger.error(f'Error in _record_manual: {e}')
             embed = EmbedTemplates.error_embed(
                 "Error",
-                f"An error occurred during manual recording: {str(e)}"
+                f"An error occurred while recording the duel: {str(e)}"
             )
             await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
 
