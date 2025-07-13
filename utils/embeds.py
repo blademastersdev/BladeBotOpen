@@ -185,18 +185,45 @@ class EmbedTemplates:
         )
         
         winner = guild.get_member(match_info['winner_id'])
-        loser = guild.get_member(match_info['loser_id'])
         
-        if winner and loser:
-            embed.add_field(
-                name="🥇 Winner",
-                value=f"{winner.mention}\n{match_data['winner']['tier']} {match_data['winner']['rank_numeral']}",
-                inline=True
-            )
+        # ✅ Handle missing loser data - compute from challenger/challenged
+        loser = None
+        loser_rank_text = "Unknown"
+        
+        if match_data.get('loser') and match_data['loser']:
+            # Use loser from match_data if available
+            loser_data = match_data['loser']
+            loser = guild.get_member(match_info.get('loser_id', 0))  # May still be None
+            loser_rank_text = f"{loser_data['tier']} {loser_data['rank_numeral']}"
+        
+        # Fallback: compute loser from challenger/challenged
+        if not loser:
+            if match_info['winner_id'] == match_info['challenger_id']:
+                loser = guild.get_member(match_info['challenged_id'])
+                if match_data.get('challenged'):
+                    loser_rank_text = f"{match_data['challenged']['tier']} {match_data['challenged']['rank_numeral']}"
+            else:
+                loser = guild.get_member(match_info['challenger_id'])
+                if match_data.get('challenger'):
+                    loser_rank_text = f"{match_data['challenger']['tier']} {match_data['challenger']['rank_numeral']}"
+        
+        # Add Winner field
+        if winner:
+            winner_rank_text = "Unknown"
+            if match_data.get('winner'):
+                winner_rank_text = f"{match_data['winner']['tier']} {match_data['winner']['rank_numeral']}"
             
             embed.add_field(
+                name="🥇 Winner",
+                value=f"{winner.mention}\n{winner_rank_text}",
+                inline=True
+            )
+        
+        # Add Runner-up field
+        if loser:
+            embed.add_field(
                 name="🥈 Runner-up",
-                value=f"{loser.mention}\n{match_data['loser']['tier']} {match_data['loser']['rank_numeral']}",
+                value=f"{loser.mention}\n{loser_rank_text}",
                 inline=True
             )
         
@@ -235,9 +262,9 @@ class EmbedTemplates:
                 embed.add_field(
                     name="👑 Rank Change Confirmed",
                     value=(
-                        f"**{winner.display_name}:** {rank_change['winner_old_tier']} {rank_change['winner_old_rank']} "
+                        f"**{winner.display_name if winner else 'Winner'}:** {rank_change['winner_old_tier']} {rank_change['winner_old_rank']} "
                         f"→ {rank_change['winner_new_tier']} {rank_change['winner_new_rank']}\n"
-                        f"**{loser.display_name}:** {rank_change['loser_old_tier']} {rank_change['loser_old_rank']} "
+                        f"**{loser.display_name if loser else 'Runner-up'}:** {rank_change['loser_old_tier']} {rank_change['loser_old_rank']} "
                         f"→ {rank_change['loser_new_tier']} {rank_change['loser_new_rank']}"
                     ),
                     inline=False

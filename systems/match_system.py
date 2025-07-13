@@ -201,14 +201,21 @@ class MatchSystem:
         challenger = await self.db.get_user(match_data['challenger_id'])
         challenged = await self.db.get_user(match_data['challenged_id'])
         winner = await self.db.get_user(match_data['winner_id'])
-        loser = await self.db.get_user(match_data['loser_id'])
+        
+        # ✅ Handle missing loser_id gracefully
+        loser = None
+        try:
+            if 'loser_id' in match_data and match_data['loser_id']:
+                loser = await self.db.get_user(match_data['loser_id'])
+        except:
+            pass  # loser_id doesn't exist, loser stays None
         
         summary = {
             'match_data': match_data,
             'challenger': challenger,
             'challenged': challenged,
             'winner': winner,
-            'loser': loser,
+            'loser': loser,  # May be None
             'match_type_info': DUEL_TYPES.get(match_data['match_type'], {}),
             'elo_changes': {
                 'winner_change': match_data['elo_change_winner'],

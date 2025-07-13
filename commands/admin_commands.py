@@ -435,42 +435,41 @@ class AdminCommands(commands.Cog):
             )
             
             if recording_result and recording_result.get('success'):
-                # Send success confirmation
+                #  CRITICAL FIX: Send notifications to duel logs channel
+                await duel_workflows.send_match_notifications(recording_result, ctx.guild)
+                
+                # Enhanced success confirmation with ELO data
                 embed = EmbedTemplates.create_base_embed(
                     title="✅ Match Recorded Successfully",
                     description=f"**{duel_type.title()} Duel** recorded between {challenger.mention} and {challenged.mention}",
                     color=0x00FF00
                 )
                 
-                embed.add_field(
-                    name="🏆 Winner",
-                    value=winner.mention,
-                    inline=True
-                )
+                embed.add_field(name="🏆 Winner", value=winner.mention, inline=True)
                 
                 if score:
-                    embed.add_field(
-                        name="📊 Score",
-                        value=score,
-                        inline=True
-                    )
+                    embed.add_field(name="📊 Score", value=score, inline=True)
                 
                 if 'match_id' in recording_result:
-                    embed.add_field(
-                        name="🔍 Match ID",
-                        value=f"`{recording_result['match_id']}`",
-                        inline=True
-                    )
+                    embed.add_field(name="🔍 Match ID", value=f"`{recording_result['match_id']}`", inline=True)
+                
+                #  CRITICAL FIX: Add ELO changes to confirmation
+                if recording_result.get('result_embed'):
+                    match_summary = await duel_workflows.match_system.get_match_summary(recording_result['match_id'])
+                    if match_summary and 'elo_changes' in match_summary:
+                        elo_changes = match_summary['elo_changes']
+                        elo_text = (
+                            f"**Winner:** {elo_changes['winner_before']} → {elo_changes['winner_after']} "
+                            f"({elo_changes['winner_change']:+d})\n"
+                            f"**Runner-up:** {elo_changes['loser_before']} → {elo_changes['loser_after']} "
+                            f"({elo_changes['loser_change']:+d})"
+                        )
+                        embed.add_field(name="⚡ ELO Changes", value=elo_text, inline=False)
                 
                 if notes:
-                    embed.add_field(
-                        name="📝 Notes",
-                        value=notes,
-                        inline=False
-                    )
+                    embed.add_field(name="📝 Notes", value=notes, inline=False)
                 
                 embed.set_footer(text=f"Recorded by {ctx.author.display_name}")
-                
                 await ctx.send(embed=embed)
             else:
                 # Handle recording failure
@@ -803,42 +802,41 @@ class AdminCommands(commands.Cog):
             )
             
             if recording_result and recording_result.get('success'):
-                # Send success confirmation
+                # ✅ CRITICAL FIX: Send notifications to duel logs channel
+                await duel_workflows.send_match_notifications(recording_result, ctx.guild)
+                
+                # Enhanced success confirmation with ELO data
                 embed = EmbedTemplates.create_base_embed(
                     title="✅ Match Recorded Successfully",
                     description=f"**{duel_type.title()} Duel** recorded between {challenger.mention} and {challenged.mention}",
                     color=0x00FF00
                 )
                 
-                embed.add_field(
-                    name="🏆 Winner",
-                    value=winner.mention,
-                    inline=True
-                )
+                embed.add_field(name="🏆 Winner", value=winner.mention, inline=True)
                 
                 if score:
-                    embed.add_field(
-                        name="📊 Score",
-                        value=score,
-                        inline=True
-                    )
+                    embed.add_field(name="📊 Score", value=score, inline=True)
                 
                 if 'match_id' in recording_result:
-                    embed.add_field(
-                        name="🔍 Match ID",
-                        value=f"`{recording_result['match_id']}`",
-                        inline=True
-                    )
+                    embed.add_field(name="🔍 Match ID", value=f"`{recording_result['match_id']}`", inline=True)
+                
+                # ✅ CRITICAL FIX: Add ELO changes to confirmation
+                if recording_result.get('result_embed'):
+                    match_summary = await duel_workflows.match_system.get_match_summary(recording_result['match_id'])
+                    if match_summary and 'elo_changes' in match_summary:
+                        elo_changes = match_summary['elo_changes']
+                        elo_text = (
+                            f"**Winner:** {elo_changes['winner_before']} → {elo_changes['winner_after']} "
+                            f"({elo_changes['winner_change']:+d})\n"
+                            f"**Runner-up:** {elo_changes['loser_before']} → {elo_changes['loser_after']} "
+                            f"({elo_changes['loser_change']:+d})"
+                        )
+                        embed.add_field(name="⚡ ELO Changes", value=elo_text, inline=False)
                 
                 if notes:
-                    embed.add_field(
-                        name="📝 Notes",
-                        value=notes,
-                        inline=False
-                    )
+                    embed.add_field(name="📝 Notes", value=notes, inline=False)
                 
                 embed.set_footer(text=f"Recorded by {ctx.author.display_name}")
-                
                 await ctx.send(embed=embed)
                 
             else:
