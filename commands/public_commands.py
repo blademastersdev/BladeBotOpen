@@ -38,7 +38,7 @@ class PublicCommands(commands.Cog):
     # NOTE: Removed ?friendly, ?official, ?challenge, ?stats commands
     # These are now handled by the refactored duel_commands.py and utility_commands.py
     
-    @commands.command(name='leaderboard', aliases=['lb', 'top'])
+    @commands.command(name='leaderboard', aliases=['lb', 'top', 'leaderboards'])
     async def leaderboard(self, ctx, count: int = 20):
         """
         View ELO leaderboard
@@ -69,7 +69,7 @@ class PublicCommands(commands.Cog):
             
             # Create and send leaderboard embed
             embed = EmbedTemplates.leaderboard_embed(leaderboard_data, f"Top {count} ELO Leaderboard")
-            await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['leaderboard'])  
+            await ctx.send(embed=embed)  
             
         except Exception as e:
             logger.error(f'Error in leaderboard command: {e}')
