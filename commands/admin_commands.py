@@ -521,13 +521,43 @@ class AdminCommands(commands.Cog):
                     return
                 
                 # Parse challenger
-                challenger = Validators.validate_mention(challenger_input, ctx.guild)
+                challenger = None
+
+                # Try Discord ID first if input is all digits
+                if challenger_input.isdigit():
+                    try:
+                        user_id = int(challenger_input)
+                        challenger = ctx.guild.get_member(user_id)
+                        
+                        # If not in guild, check database for reserve users
+                        if not challenger:
+                            user_data = await self.db.get_user(user_id)
+                            if user_data:
+                                # Create a mock member object for database users
+                                challenger = type('MockMember', (), {
+                                    'id': user_id,
+                                    'display_name': user_data['username'],
+                                    'mention': f"<@{user_id}>",
+                                    'name': user_data['username']
+                                })()
+                    except ValueError:
+                        pass
+
+                # If not found, try existing methods
                 if not challenger:
-                    # Try username search as fallback
-                    challenger = discord.utils.find(
-                        lambda m: challenger_input.lower() in m.display_name.lower(),
-                        ctx.guild.members
-                    )
+                    result = Validators.validate_mention(challenger_input, ctx.guild)
+                    # Handle tuple return from validator
+                    if isinstance(result, tuple):
+                        challenger = None  # Validation failed
+                    else:
+                        challenger = result
+                        
+                    if not challenger:
+                        # Try username search as fallback
+                        challenger = discord.utils.find(
+                            lambda m: challenger_input.lower() in m.display_name.lower(),
+                            ctx.guild.members
+                        )
                 
                 if not challenger:
                     embed = EmbedTemplates.error_embed(
@@ -565,13 +595,43 @@ class AdminCommands(commands.Cog):
                     return
                 
                 # Parse challenged
-                challenged = Validators.validate_mention(challenged_input, ctx.guild)
+                challenged = None
+
+                # Try Discord ID first if input is all digits
+                if challenged_input.isdigit():
+                    try:
+                        user_id = int(challenged_input)
+                        challenged = ctx.guild.get_member(user_id)
+                        
+                        # If not in guild, check database for reserve users
+                        if not challenged:
+                            user_data = await self.db.get_user(user_id)
+                            if user_data:
+                                # Create a mock member object for database users
+                                challenged = type('MockMember', (), {
+                                    'id': user_id,
+                                    'display_name': user_data['username'],
+                                    'mention': f"<@{user_id}>",
+                                    'name': user_data['username']
+                                })()
+                    except ValueError:
+                        pass
+
+                # If not found, try existing methods
                 if not challenged:
-                    # Try username search as fallback
-                    challenged = discord.utils.find(
-                        lambda m: challenged_input.lower() in m.display_name.lower(),
-                        ctx.guild.members
-                    )
+                    result = Validators.validate_mention(challenged_input, ctx.guild)
+                    # Handle tuple return from validator
+                    if isinstance(result, tuple):
+                        challenged = None  # Validation failed
+                    else:
+                        challenged = result
+                        
+                    if not challenged:
+                        # Try username search as fallback
+                        challenged = discord.utils.find(
+                            lambda m: challenged_input.lower() in m.display_name.lower(),
+                            ctx.guild.members
+                        )
                 
                 if not challenged:
                     embed = EmbedTemplates.error_embed(
@@ -613,7 +673,11 @@ class AdminCommands(commands.Cog):
                 embed = EmbedTemplates.error_embed("Timeout", "Duel type selection timed out")
                 await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
                 return
-            
+
+            # Right after the duel type selection, add:
+            logger.error(f"DEBUG EARLY: challenger={type(challenger)}, challenged={type(challenged)}")
+            logger.error(f"DEBUG VALUES: challenger={challenger}, challenged={challenged}")
+
             # Step 4: Get winner (if not provided)
             if not winner:
                 embed = EmbedTemplates.create_base_embed(
@@ -719,6 +783,9 @@ class AdminCommands(commands.Cog):
             # Ensure both users are registered before recording
             await self.user_system.ensure_user_registered(challenger)
             await self.user_system.ensure_user_registered(challenged)
+
+            # Right before the DuelWorkflows call, add:
+            logger.error(f"DEBUG: challenger={type(challenger)}, challenged={type(challenged)}, winner={type(winner)}")
             
             # Now record the match using the proper workflow system
             from workflows.duel_workflows import DuelWorkflows
