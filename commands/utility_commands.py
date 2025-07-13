@@ -152,8 +152,8 @@ class UtilityCommands(commands.Cog):
             
             embed.set_footer(text=f"Requested by {ctx.author.display_name}")
             
-            # Send with cleanup timer regardless of interaction
-            message = await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['info'])
+            # Send without cleanup timer regardless of interaction
+            message = await ctx.send(embed=embed)
             
             # Add reaction options for interactivity
             await message.add_reaction('🔍')  # For match history
