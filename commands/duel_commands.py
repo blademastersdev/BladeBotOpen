@@ -205,7 +205,7 @@ class DuelCommands(commands.Cog):
             if self.ticket_system.user_has_active_duel_ticket(ctx.author.id):
                 embed = EmbedTemplates.error_embed(
                     "Active Duel Found",
-                    "You already have an active duel ticket! Complete your current duel before starting a new one."
+                    "You already have an active duel ticket! Complete your current duel (or ask a moderator to close it) before starting a new one."
                 )
                 await ctx.send(embed=embed)
                 return
@@ -354,7 +354,7 @@ class DuelCommands(commands.Cog):
             if self.ticket_system.user_has_active_duel_ticket(ctx.author.id):
                 embed = EmbedTemplates.error_embed(
                     "Active Duel Found",
-                    "You already have an active duel ticket! Complete your current duel before starting a new one."
+                    "You already have an active duel ticket! Complete your current duel (or ask a moderator to close it) before starting a new one."
                 )
                 await ctx.send(embed=embed)
                 return
@@ -510,7 +510,7 @@ class DuelCommands(commands.Cog):
             if self.ticket_system.user_has_active_duel_ticket(ctx.author.id):
                 embed = EmbedTemplates.error_embed(
                     "Active Duel Found",
-                    "You already have an active duel ticket! Complete your current duel before starting a new one."
+                    "You already have an active duel ticket! Complete your current duel (or ask a moderator to close it) before starting a new one."
                 )
                 await ctx.send(embed=embed)
                 return

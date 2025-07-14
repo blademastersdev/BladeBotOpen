@@ -55,7 +55,58 @@ class UtilityCommands(commands.Cog):
         from config import CLEANUP_TIMINGS
         
         try:
-            # Default to command author if no target specified
+            # ✅ MINIMAL ADDITION: Check if raw input was a Discord ID
+            if target is None and ctx.message.content.strip().split()[1:]:
+                # User provided input but it didn't parse as Member - check if it's an ID
+                raw_input = ctx.message.content.strip().split()[1]
+                if raw_input.isdigit():
+                    user_id = int(raw_input)
+                    # Check database for user who left server
+                    user_data = await self.db.get_user(user_id)
+                    if user_data:
+                        # Handle database-only user (who left server)
+                        rank_display = "Unranked" if user_data['tier'] in ['Guest', 'Evaluation'] or user_data['rank_numeral'] == 'N/A' else f"{user_data['tier']} {user_data['rank_numeral']}"
+                        
+                        win_rate = (user_data['wins'] / user_data['games_played'] * 100) if user_data['games_played'] > 0 else 0
+                        
+                        embed = EmbedTemplates.create_base_embed(
+                            title=f"📊 {user_data['username']}'s Statistics",
+                            description=f"**{rank_display}** • ELO: **{user_data['elo_rating']}** • 🚪 *User has left server*",
+                            color=0x666666  # Gray color for left users
+                        )
+                        
+                        embed.add_field(
+                            name="🎮 Match Record",
+                            value=f"**Games:** {user_data['games_played']}\n**Wins:** {user_data['wins']}\n**Losses:** {user_data['losses']}\n**Win Rate:** {win_rate:.1f}%",
+                            inline=True
+                        )
+                        
+                        # Replace with this (remove the ELO tier line):
+                        embed.add_field(
+                            name="⚡ ELO Rating", 
+                            value=f"**Current:** {user_data['elo_rating']}",
+                            inline=True
+                        )
+                        
+                        embed.add_field(
+                            name="📅 Account Info",
+                            value=f"**Status:** Reserve (Left Server)\n**ID:** {user_id}",
+                            inline=True
+                        )
+                        
+                        embed.set_footer(text=f"Stats for user who left server • Requested by {ctx.author.display_name}")
+                        await ctx.send(embed=embed)
+                        return
+                    else:
+                        # ID not found in database
+                        embed = EmbedTemplates.error_embed(
+                            "User Not Found",
+                            f"No data found for user ID: {user_id}\n\n**Tip:** Use `?stats @user` for current members"
+                        )
+                        await ctx.send(embed=embed, delete_after=CLEANUP_TIMINGS['error'])
+                        return
+            
+            # ✅ EXISTING CODE UNCHANGED - Default to command author if no target
             if not target:
                 target = ctx.author
             
@@ -96,58 +147,53 @@ class UtilityCommands(commands.Cog):
             if leaderboard_rank:
                 elo_text += f" • Rank **#{leaderboard_rank}**"
             
-            embed = EmbedTemplates.create_base_embed( 
+            embed = EmbedTemplates.create_base_embed(
                 title=f"📊 {target.display_name}'s Statistics",
                 description=f"**{rank_display}** • {elo_text}",
-                color=0x4169E1
+                color=user_data['tier_color']
             )
             
-            # Add avatar if available
+            # Set user avatar
             if target.avatar:
                 embed.set_thumbnail(url=target.avatar.url)
             
-            # Calculate win rate
-            total_games = user_data['games_played']
-            wins = user_data['wins']
-            losses = user_data['losses']
-            win_rate = (wins / total_games * 100) if total_games > 0 else 0
-            
-            # Basic stats
+            # Match statistics
+            win_rate = user_data['win_rate']
             embed.add_field(
-                name="⚔️ Combat Record",
-                value=f"**Wins:** {wins}\n**Losses:** {losses}\n**Win Rate:** {win_rate:.1f}%",
+                name="🎮 Match Record",
+                value=f"**Games:** {user_data['games_played']}\n**Wins:** {user_data['wins']}\n**Losses:** {user_data['losses']}\n**Win Rate:** {win_rate:.1f}%",
                 inline=True
             )
             
-            # Add reserve status indicator if applicable
-            if user_data.get('status') == 'reserve':
-                embed.add_field(
-                    name="📋 Status",
-                    value="**Reserve** (Not in server)",
-                    inline=True
-                )
+            # Replace with:
+            embed.add_field(
+                name="⚡ ELO Details",
+                value=f"**Rating:** {user_data['elo_rating']}",
+                inline=True
+            )
             
-            # Send main embed WITHOUT cleanup timer for persistence
+            # Activity info
+            embed.add_field(
+                name="📅 Activity",
+                value=f"**Joined:** {user_data.get('joined_date', 'Unknown')}\n**Status:** Active",
+                inline=True
+            )
+            
+            # Add navigation reactions
             message = await ctx.send(embed=embed)
+            await message.add_reaction('🔍')  # Match logs
+            await message.add_reaction('📊')  # Extended stats
             
-            # Add reaction options for additional info
-            await message.add_reaction('🔍')  # For match logs
-            await message.add_reaction('📊')  # For extended stats
+            embed.set_footer(text="React with 🔍 for match logs or 📊 for extended stats")
+            await message.edit(embed=embed)
             
+            # Wait for reactions
             def check(reaction, user):
-                return (user == ctx.author and 
-                    str(reaction.emoji) in ['🔍', '📊'] and
-                    reaction.message.id == message.id)
+                return user == ctx.author and str(reaction.emoji) in ['🔍', '📊'] and reaction.message.id == message.id
             
             try:
                 reaction, user = await self.bot.wait_for('reaction_add', timeout=60.0, check=check)
                 
-                # User interacted - clear reactions and show additional info
-                try:
-                    await message.clear_reactions()
-                except:
-                    pass
-                    
                 if str(reaction.emoji) == '🔍':
                     await self.stats_logs(ctx, target)
                 elif str(reaction.emoji) == '📊':
@@ -159,7 +205,7 @@ class UtilityCommands(commands.Cog):
                     await message.clear_reactions()
                 except:
                     pass
-                
+                    
         except Exception as e:
             logger.error(f'Error in stats command: {e}')
             embed = EmbedTemplates.error_embed(

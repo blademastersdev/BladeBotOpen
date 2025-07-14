@@ -184,48 +184,42 @@ class EmbedTemplates:
             color=EMBED_COLORS['success']
         )
         
-        winner = guild.get_member(match_info['winner_id'])
+        # Get guild members (may be None if they left)
+        winner_member = guild.get_member(match_info['winner_id'])
         
-        # ✅ Handle missing loser data - compute from challenger/challenged
-        loser = None
-        loser_rank_text = "Unknown"
+        # ✅ Compute loser from challenger/challenged
+        if match_info['winner_id'] == match_info['challenger_id']:
+            loser_member = guild.get_member(match_info['challenged_id'])
+            loser_id = match_info['challenged_id']
+        else:
+            loser_member = guild.get_member(match_info['challenger_id'])
+            loser_id = match_info['challenger_id']
         
-        if match_data.get('loser') and match_data['loser']:
-            # Use loser from match_data if available
-            loser_data = match_data['loser']
-            loser = guild.get_member(match_info.get('loser_id', 0))  # May still be None
-            loser_rank_text = f"{loser_data['tier']} {loser_data['rank_numeral']}"
+        # ✅ WINNER DISPLAY - Always use <@ID> mention format
+        winner_display = f"<@{match_info['winner_id']}>"
+        if match_data.get('winner'):
+            winner_rank = f"{match_data['winner']['tier']} {match_data['winner']['rank_numeral']}"
+        else:
+            winner_rank = "Unknown"
         
-        # Fallback: compute loser from challenger/challenged
-        if not loser:
-            if match_info['winner_id'] == match_info['challenger_id']:
-                loser = guild.get_member(match_info['challenged_id'])
-                if match_data.get('challenged'):
-                    loser_rank_text = f"{match_data['challenged']['tier']} {match_data['challenged']['rank_numeral']}"
-            else:
-                loser = guild.get_member(match_info['challenger_id'])
-                if match_data.get('challenger'):
-                    loser_rank_text = f"{match_data['challenger']['tier']} {match_data['challenger']['rank_numeral']}"
+        embed.add_field(
+            name="🥇 Winner",
+            value=f"{winner_display}\n{winner_rank}",
+            inline=True
+        )
         
-        # Add Winner field
-        if winner:
-            winner_rank_text = "Unknown"
-            if match_data.get('winner'):
-                winner_rank_text = f"{match_data['winner']['tier']} {match_data['winner']['rank_numeral']}"
-            
-            embed.add_field(
-                name="🥇 Winner",
-                value=f"{winner.mention}\n{winner_rank_text}",
-                inline=True
-            )
+        # ✅ LOSER DISPLAY - Always use <@ID> mention format
+        loser_display = f"<@{loser_id}>"
+        if match_data.get('loser'):
+            loser_rank = f"{match_data['loser']['tier']} {match_data['loser']['rank_numeral']}"
+        else:
+            loser_rank = "Unknown"
         
-        # Add Runner-up field
-        if loser:
-            embed.add_field(
-                name="🥈 Runner-up",
-                value=f"{loser.mention}\n{loser_rank_text}",
-                inline=True
-            )
+        embed.add_field(
+            name="🥈 Runner-up",
+            value=f"{loser_display}\n{loser_rank}",
+            inline=True
+        )
         
         # Score if available
         if match_info.get('score'):
@@ -259,12 +253,15 @@ class EmbedTemplates:
                     inline=False
                 )
             elif rank_change['status'] == 'confirmed':
+                winner_name = winner_member.display_name if winner_member else (match_data['winner']['username'] if match_data.get('winner') else "Winner")
+                loser_name = loser_member.display_name if loser_member else (match_data['loser']['username'] if match_data.get('loser') else "Runner-up")
+                
                 embed.add_field(
                     name="👑 Rank Change Confirmed",
                     value=(
-                        f"**{winner.display_name if winner else 'Winner'}:** {rank_change['winner_old_tier']} {rank_change['winner_old_rank']} "
+                        f"**{winner_name}:** {rank_change['winner_old_tier']} {rank_change['winner_old_rank']} "
                         f"→ {rank_change['winner_new_tier']} {rank_change['winner_new_rank']}\n"
-                        f"**{loser.display_name if loser else 'Runner-up'}:** {rank_change['loser_old_tier']} {rank_change['loser_old_rank']} "
+                        f"**{loser_name}:** {rank_change['loser_old_tier']} {rank_change['loser_old_rank']} "
                         f"→ {rank_change['loser_new_tier']} {rank_change['loser_new_rank']}"
                     ),
                     inline=False

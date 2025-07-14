@@ -65,7 +65,7 @@ class ChallengeSystem:
             existing_count = (await cursor.fetchone())['count']
             
             if existing_count > 0:
-                return False, f"You already have an active {challenge_type} challenge. Please wait for it to be accepted, declined, or expired.", None
+                return False, f"You already have an active {challenge_type} challenge. Please use `?duel cancel` to cancel your previous request before making a new one.", None
         
         # Additional validation for BM challenges
         if challenge_type == 'bm':
